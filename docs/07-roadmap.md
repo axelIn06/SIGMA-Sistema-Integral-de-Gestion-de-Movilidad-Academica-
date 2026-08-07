@@ -1,5 +1,7 @@
 # Roadmap de implementación
 
+La planificación de las actividades y evidencias de la primera semana de prácticas se encuentra en [09-plan-semana-01.md](09-plan-semana-01.md). El esquema de 21 semanas, la metodología Scrum adaptada y los hitos de producto están en [10-plan-general-21-semanas.md](10-plan-general-21-semanas.md); el trabajo priorizado se administra en [11-product-backlog.md](11-product-backlog.md).
+
 ## Entrega actual — prototipo navegable
 
 Dashboard por rol, convocatorias, SGMS, SGME, nominaciones, revisión documental, historial, reportes CSV y persistencia local.

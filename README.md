@@ -29,6 +29,8 @@ Los cambios de convocatorias y postulaciones quedan guardados localmente en el n
 - Reportes visuales y exportación CSV.
 - Diseño adaptable a móvil y escritorio.
 - Documentación funcional, modelo de datos, permisos y roadmap.
+- Planificación de 21 semanas, metodología Scrum y product backlog en `docs/09-plan-semana-01.md`, `docs/10-plan-general-21-semanas.md` y `docs/11-product-backlog.md`.
+- Informe de planificación de sprints en `docs/12-plan-de-sprints-sigma-ocri.docx`.
 
 ## Limitaciones de esta entrega
 
@@ -41,5 +43,8 @@ index.html              Aplicación
 src/styles.css          Sistema visual
 src/app.js              Estado, vistas y flujos
 docs/                   Especificación funcional y técnica
+  09-plan-semana-01.md  Planificación de prácticas — Semana 1
+  10-plan-general-21-semanas.md  Plan de producto y sprints
+  11-product-backlog.md Product backlog inicial
+  12-plan-de-sprints-sigma-ocri.docx  Informe de planificación de sprints
 ```
-
