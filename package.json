@@ -1,0 +1,31 @@
+{
+  "name": "sigma-sistema-integral-de-gestion-de-movilidad-academica-",
+  "version": "1.0.0",
+  "description": "Sistema Integral de Gestión de Movilidad Académica para la OCRI UNSAAC.",
+  "private": true,
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/axelIn06/SIGMA-Sistema-Integral-de-Gestion-de-Movilidad-Academica-.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/axelIn06/SIGMA-Sistema-Integral-de-Gestion-de-Movilidad-Academica-/issues"
+  },
+  "homepage": "https://github.com/axelIn06/SIGMA-Sistema-Integral-de-Gestion-de-Movilidad-Academica-#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.2"
+  },
+  "devDependencies": {
+    "vite": "^8.2.1"
+  }
+}

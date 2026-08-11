@@ -2,18 +2,21 @@
 
 Sistema Integral de Gestión de Movilidad Académica para la OCRI UNSAAC.
 
-Esta primera entrega es un prototipo funcional sin dependencias externas. Incluye los módulos SGMS (movilidad saliente), SGME (movilidad entrante) y Panel OCRI, con persistencia en `localStorage`. Se puede ejecutar aun cuando el equipo no tenga Node.js instalado.
+Esta primera entrega incluye el prototipo funcional de SGMS, SGME y Panel OCRI. La autenticación real se integra con Supabase; los demás flujos conservan datos de demostración temporalmente.
 
 ## Ejecutar
 
-Abra `index.html` en un navegador moderno. En Windows también puede hacer doble clic en el archivo.
+Con Docker Desktop y Supabase local iniciados, cree el archivo de variables y ejecute el servidor:
 
-Perfiles de demostración disponibles desde la pantalla de acceso:
+```bash
+cp .env.example .env.local
+# Complete VITE_SUPABASE_PUBLISHABLE_KEY con la clave pública local.
+npm run dev
+```
 
-- Administrador OCRI
-- Evaluador OCRI
-- Alumno UNSAAC
-- Estudiante externo
+Abra la dirección que indique Vite, normalmente `http://localhost:5173`.
+
+Las cuentas se crean e inician sesión mediante Supabase Auth. Las nuevas cuentas quedan en estado `PENDIENTE` hasta que OCRI les asigne un rol.
 
 Los cambios de convocatorias y postulaciones quedan guardados localmente en el navegador. El botón **Restablecer demo** recupera los datos iniciales.
 
@@ -34,7 +37,7 @@ Los cambios de convocatorias y postulaciones quedan guardados localmente en el n
 
 ## Limitaciones de esta entrega
 
-El equipo no dispone actualmente de Node.js, npm ni Git. Por ello, autenticación real, PostgreSQL/Prisma, almacenamiento privado, envío de correos y generación PDF quedan definidos como siguiente etapa de integración. El prototipo no debe usarse con documentos personales reales: todo se almacena únicamente en el navegador.
+El inicio de sesión ya usa Supabase local. Las convocatorias, postulaciones y documentos todavía son datos de demostración guardados en el navegador; su migración a PostgreSQL y Storage corresponde a los siguientes sprints. No use documentos personales reales durante esta etapa.
 
 ## Estructura
 
