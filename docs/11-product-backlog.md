@@ -8,8 +8,8 @@ Prioridad: **P0** imprescindible para la primera versión utilizable; **P1** imp
 
 | ID | Épica | Historia de usuario | Prioridad | Sprint objetivo | Criterio de aceptación resumido |
 | --- | --- | --- | --- | --- | --- |
-| US-01 | Acceso | Como usuario, quiero iniciar sesión para acceder solo a mis funciones. | P0 | S1 | Identidad autenticada, sesión segura y cierre de sesión. |
-| US-02 | Acceso | Como administrador, quiero asignar roles para controlar el acceso. | P0 | S1 | Las rutas y acciones se restringen en servidor según rol. |
+| US-01 | Acceso | Como usuario, quiero iniciar sesión para acceder solo a mis funciones. | P0 | S1 | **Hecho localmente:** identidad autenticada, sesión, cierre, verificación inicial de correo y contraseña. |
+| US-02 | Acceso | Como administrador, quiero asignar roles para controlar el acceso. | P0 | S1 | **Hecho localmente:** roles automáticos por dominio, administración OCRI y funciones protegidas en servidor. |
 | US-03 | Catálogos | Como administrador, quiero administrar periodos, universidades, facultades y escuelas. | P1 | S2/S8 | CRUD validado; catálogos disponibles en formularios. |
 | US-04 | Convocatorias | Como administrador, quiero crear convocatorias por tipo de movilidad. | P0 | S2 | Incluye periodo, fechas, vacantes, destino y estado. |
 | US-05 | Requisitos | Como administrador, quiero definir requisitos por convocatoria. | P0 | S2 | El checklist se crea automáticamente en cada postulación. |
@@ -35,7 +35,7 @@ Prioridad: **P0** imprescindible para la primera versión utilizable; **P1** imp
 
 ## Orden sugerido para la primera planificación
 
-Para iniciar el siguiente sprint se seleccionan: `US-01`, `US-02` y la preparación técnica necesaria para soportarlas. Luego se continúa con `US-04`, `US-05` y `US-06`. Este orden permite mostrar primero una aplicación real con acceso controlado y después el flujo institucional de convocatorias, antes de pedir documentos o datos personales.
+`US-01` y `US-02` están implementadas y verificadas en el entorno local. La siguiente selección propuesta es `US-04`, `US-05` y `US-06`: convocatorias, requisitos y consulta de convocatorias activas. Antes de declararlas terminadas se migrarán sus datos de demostración desde `localStorage` a PostgreSQL con RLS.
 
 ## Plantilla de sprint backlog
 

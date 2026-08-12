@@ -58,6 +58,34 @@ El prototipo actual es la línea de partida. El objetivo no es desarrollar todas
 - **Semana 20:** versión piloto validada.
 - **Semana 21:** cierre técnico y académico.
 
+## Avance registrado — Sprint 1 / Día 1 y Día 2
+
+El Sprint 1 se adelantó respecto al plan inicial: en lugar de iniciar con una simulación de acceso, se construyó y probó una base de autenticación real en Supabase local. Este avance cubre `US-01` y `US-02` en entorno de desarrollo; queda pendiente publicarlo en Supabase Cloud y ejecutar pruebas de aceptación con OCRI.
+
+### Trabajo realizado
+
+- Se inicializó Supabase CLI y Docker para ejecutar PostgreSQL, Auth, Studio y Mailpit localmente.
+- Se creó el esquema de identidad: perfiles, roles, universidades, dominios institucionales, RLS y funciones administrativas.
+- Se definieron cuatro roles operativos: `ADMIN_OCRI`, `ESTUDIANTE_UNSAAC`, `ESTUDIANTE_EXTERNO` y `GESTOR_EXTERNO`.
+- Se registró el administrador funcional global `ocri@unsaac.edu.pe` mediante un bootstrap técnico único.
+- Se implementó el flujo de cuenta: dominio aprobado → enlace de verificación → contraseña personal → acceso posterior con correo y contraseña.
+- Se restringió el registro: Gmail y dominios sin universidad asociada no reciben enlace ni crean cuenta.
+- Se automatizó el rol base de estudiante para cuentas verificadas de dominios aprobados; OCRI designa directamente a los gestores externos.
+- Se creó el panel **Administración OCRI → Accesos y universidades** para registrar instituciones/dominios y designar gestores externos.
+- Se separó visualmente SGMS, SGME y Administración OCRI; el gestor externo ve solo su universidad y sus procesos SGME.
+- Se documentaron el flujo técnico, la seguridad y el propósito de cada migración.
+
+### Evidencias verificadas
+
+- `npm run build` completa sin errores.
+- `supabase db lint --local` no reporta errores de esquema.
+- Se crearon, confirmaron y limpiaron cuentas de prueba; solo se conserva la cuenta administradora local.
+- Se verificó la creación automática de perfiles y la asignación automática de rol para el dominio UNSAAC.
+
+### Siguiente incremento
+
+El Sprint 2 inicia con `US-04`, `US-05` y `US-06`. Se migrarán convocatorias y requisitos del prototipo a PostgreSQL, se aplicarán políticas RLS y se mostrará a estudiantes únicamente las convocatorias publicadas, vigentes y compatibles con su tipo de movilidad.
+
 ## Qué presentar cada semana
 
 En cada demostración se debe presentar: objetivo de la semana, historias terminadas, recorrido de usuario en el software, pruebas realizadas, observaciones recibidas, bloqueos y objetivo de la siguiente semana. Las historias no aceptadas regresan al backlog; no se consideran terminadas solo por estar programadas.

@@ -16,7 +16,19 @@ npm run dev
 
 Abra la dirección que indique Vite, normalmente `http://localhost:5173`.
 
-Las cuentas se crean e inician sesión mediante Supabase Auth. Las nuevas cuentas quedan en estado `PENDIENTE` hasta que OCRI les asigne un rol.
+Las cuentas usan Supabase Auth con este flujo:
+
+1. La persona crea su cuenta con su correo universitario.
+2. SIGMA envía un enlace de verificación para comprobar que controla ese correo.
+3. Tras verificarlo, la persona define una contraseña personal.
+4. Los siguientes ingresos se realizan con correo y contraseña.
+5. Si el dominio está aprobado, SIGMA asigna automáticamente el rol base de estudiante; OCRI designa directamente a los gestores externos. El administrador global es `ocri@unsaac.edu.pe` mediante un bootstrap técnico único.
+
+El enlace por correo también se usa únicamente para recuperar una contraseña olvidada.
+
+La explicación del flujo, roles, migraciones y responsabilidades de cada archivo está en [docs/13-guia-tecnica-login-y-datos.md](docs/13-guia-tecnica-login-y-datos.md).
+
+La explicación detallada, migración por migración, está en [docs/14-diccionario-de-migraciones.md](docs/14-diccionario-de-migraciones.md).
 
 Los cambios de convocatorias y postulaciones quedan guardados localmente en el navegador. El botón **Restablecer demo** recupera los datos iniciales.
 
