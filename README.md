@@ -26,6 +26,8 @@ Las cuentas usan Supabase Auth con este flujo:
 
 El enlace por correo también se usa únicamente para recuperar una contraseña olvidada.
 
+Mientras se desarrolla localmente, los enlaces no llegan a una bandeja de correo real: se revisan en Mailpit en `http://localhost:54324`. Este buzón de pruebas es parte de Supabase local y evita enviar correos reales durante las pruebas.
+
 La explicación del flujo, roles, migraciones y responsabilidades de cada archivo está en [docs/13-guia-tecnica-login-y-datos.md](docs/13-guia-tecnica-login-y-datos.md).
 
 La explicación detallada, migración por migración, está en [docs/14-diccionario-de-migraciones.md](docs/14-diccionario-de-migraciones.md).

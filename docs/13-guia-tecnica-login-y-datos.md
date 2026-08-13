@@ -56,3 +56,14 @@ Una migración es un cambio ordenado e inmutable de PostgreSQL. `supabase migrat
 - Contraseñas y claves `service_role` nunca se colocan en `src/app.js` ni se suben a Git.
 - Las funciones `admin_*` comprueban `ADMIN_OCRI` en PostgreSQL.
 - Docker y Mailpit son pruebas locales; Supabase Cloud será producción.
+
+## Correo local con Mailpit
+
+Durante el desarrollo, Supabase local no envía correos a Internet. Su servicio de Auth entrega los mensajes a **Mailpit**, el buzón de pruebas incluido en los contenedores de Supabase.
+
+1. Inicie el entorno con `supabase start` (o manténgalo iniciado si Docker ya muestra los contenedores de SIGMA).
+2. Abra `http://localhost:54324` para ver Mailpit.
+3. Cree una cuenta o solicite recuperar la contraseña desde SIGMA.
+4. Abra el mensaje más reciente en Mailpit y use el enlace de verificación o recuperación.
+
+Mailpit permite comprobar el flujo completo sin usar correos reales ni exponer datos personales. No guarda los mensajes de manera permanente y no reemplaza el SMTP institucional que se configurará al desplegar SIGMA.
