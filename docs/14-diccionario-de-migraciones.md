@@ -84,6 +84,10 @@ Completa el endurecimiento del esquema antes de usarlo en el entorno remoto:
 
 Esta migración no cambia los datos funcionales; reduce la superficie de acceso y mejora el comportamiento del esquema al crecer.
 
+## 20260828183000_sync_security_and_fk_indexes.sql
+
+Replica de forma incremental los permisos internos y los índices de claves foráneas incorporados durante la limpieza. Es necesaria porque la versión anterior ya estaba registrada en Supabase Cloud: una migración aplicada no se edita para intentar ejecutarla nuevamente, sino que se añade otra versión reproducible e idempotente.
+
 ## Cómo leer el SQL
 
 - `create table`: crea una entidad y sus columnas.
