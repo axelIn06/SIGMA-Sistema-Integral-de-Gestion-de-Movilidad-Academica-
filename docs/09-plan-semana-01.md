@@ -12,13 +12,13 @@ Levantar y organizar los requerimientos iniciales de movilidad saliente (SGMS) y
 
 ## Actividades planificadas
 
-| Día | Actividad | Resultado esperado |
-| --- | --- | --- |
-| 1 | Inducción al contexto de OCRI y revisión del proceso actual de movilidad. | Comprensión inicial de actores, documentos, convocatorias y puntos de control. |
-| 2 | Identificación de usuarios, roles y permisos: administrador OCRI, evaluador, estudiante UNSAAC, gestor externo y estudiante externo. | Matriz preliminar de accesos y responsabilidades. |
-| 3 | Modelado de los flujos SGMS y SGME, desde la convocatoria/nominación hasta el cierre del expediente. | Estados y transiciones iniciales por tipo de movilidad. |
-| 4 | Organización de módulos, entidades y reglas de negocio; definición de una arquitectura objetivo de monolito modular. | Especificación funcional y modelo de datos inicial. |
-| 5 | Construcción y revisión de un prototipo navegable con datos de demostración. | Prototipo para validar navegación, paneles, convocatorias, postulaciones, documentos y reportes. |
+| Día | Actividad                                                                                                                            | Resultado esperado                                                                               |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| 1   | Inducción al contexto de OCRI y revisión del proceso actual de movilidad.                                                            | Comprensión inicial de actores, documentos, convocatorias y puntos de control.                   |
+| 2   | Identificación de usuarios, roles y permisos: administrador OCRI, evaluador, estudiante UNSAAC, gestor externo y estudiante externo. | Matriz preliminar de accesos y responsabilidades.                                                |
+| 3   | Modelado de los flujos SGMS y SGME, desde la convocatoria/nominación hasta el cierre del expediente.                                 | Estados y transiciones iniciales por tipo de movilidad.                                          |
+| 4   | Organización de módulos, entidades y reglas de negocio; definición de una arquitectura objetivo de monolito modular.                 | Especificación funcional y modelo de datos inicial.                                              |
+| 5   | Construcción y revisión de un prototipo navegable con datos de demostración.                                                         | Prototipo para validar navegación, paneles, convocatorias, postulaciones, documentos y reportes. |
 
 ## Entregables y evidencias
 

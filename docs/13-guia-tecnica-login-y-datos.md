@@ -13,42 +13,36 @@
 
 ## Roles
 
-| Rol | Asignación | Alcance |
-|---|---|---|
-| `ADMIN_OCRI` | Bootstrap técnico único para `ocri@unsaac.edu.pe` | Administración transversal. |
-| `ESTUDIANTE_UNSAAC` | Automática con dominio UNSAAC | SGMS. |
-| `ESTUDIANTE_EXTERNO` | Automática con dominio externo aprobado | SGME. |
-| `GESTOR_EXTERNO` | Designación directa de OCRI | Nominaciones SGME de su universidad. |
+| Rol                  | Asignación                                        | Alcance                              |
+| -------------------- | ------------------------------------------------- | ------------------------------------ |
+| `ADMIN_OCRI`         | Bootstrap técnico único para `ocri@unsaac.edu.pe` | Administración transversal.          |
+| `ESTUDIANTE_UNSAAC`  | Automática con dominio UNSAAC                     | SGMS.                                |
+| `ESTUDIANTE_EXTERNO` | Automática con dominio externo aprobado           | SGME.                                |
+| `GESTOR_EXTERNO`     | Designación directa de OCRI                       | Nominaciones SGME de su universidad. |
 
 Nadie solicita ni se autoasigna roles. Las reglas se validan en PostgreSQL, no solo en la interfaz.
 
 ## Archivos del frontend
 
-| Archivo | Responsabilidad |
-|---|---|
-| `index.html` | Punto de entrada de la web. |
-| `src/styles.css` | Diseño visual adaptable. |
-| `src/app.js` | Vistas, prototipo temporal y llamadas a Supabase. |
-| `.env.local` | Variables locales; no se sube a Git. |
-| `package.json` | Dependencias y comandos de Vite. |
+| Archivo          | Responsabilidad                                         |
+| ---------------- | ------------------------------------------------------- |
+| `index.html`     | Punto de entrada de la web.                             |
+| `src/styles.css` | Diseño visual adaptable.                                |
+| `src/app.js`     | Vistas, estado temporal restante y llamadas a Supabase. |
+| `.env.local`     | Variables locales; no se sube a Git.                    |
+| `package.json`   | Dependencias y comandos de Vite.                        |
 
-`boot` restaura la sesión. `loadSession` carga perfil y rol. `login`, `register`, `setPassword` y `requestPasswordReset` controlan Auth. `access`, `createUniversity` y `designateExternalManager` son el panel OCRI. Convocatorias y postulaciones siguen siendo demostración en `localStorage` hasta el siguiente sprint.
+`boot` restaura la sesión. `loadSession` carga perfil, rol, convocatorias y postulaciones autorizadas. `login`, `register`, `setPassword` y `requestPasswordReset` controlan Auth. `access`, `createUniversity` y `designateExternalManager` son el panel OCRI. Perfiles, convocatorias, borradores SGMS y documentos se guardan en Supabase; solamente las nominaciones del prototipo continúan en `localStorage`.
 
 ## Migraciones
 
-Una migración es un cambio ordenado e inmutable de PostgreSQL. `supabase migration up --local` aplica cada archivo pendiente una vez. No se editan ni borran migraciones ya aplicadas; una corrección se agrega como una nueva.
+Una migración es un cambio ordenado de PostgreSQL. `supabase migration up --local` aplica cada archivo pendiente una vez. Durante el prototipado se consolidó el historial antes de publicarlo, de modo que una instalación nueva crea directamente el modelo vigente.
 
-| Migración | Propósito |
-|---|---|
-| `20260810174010_identity_foundation` | Perfiles, roles, universidades, dominios, trigger inicial y RLS. |
-| `20260811100000_access_administration` | Bootstrap de administrador y funciones administrativas. |
-| `20260811113000_email_verification_and_password_setup` | Verificación de correo y configuración de contraseña. |
-| `20260811130000_university_domain_enforcement` | Vínculo por dominio y protección de campos del perfil. |
-| `20260811131500_fix_domain_validation` | Corrección y vínculo de cuentas existentes. |
-| `20260811140000_automatic_student_access_and_role_requests` | Rol base automático; las solicitudes fueron retiradas posteriormente. |
-| `20260811150000_simplify_operational_roles` | Reduce a los cuatro roles aprobados. |
-| `20260811160000_remove_role_requests` | OCRI designa gestores directamente. |
-| `20260811170000_restrict_registration_to_approved_domains` | Rechaza dominios no aprobados antes de enviar correo. |
+| Migración                                    | Propósito                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------- |
+| `20260810174010_identity_foundation`         | Identidad, perfiles, cuatro roles, universidades, fotos privadas y RLS.   |
+| `20260818120000_convocatorias`               | Convocatorias, requisitos, materiales, enlaces, Storage y funciones OCRI. |
+| `20260827113000_postulaciones_estudiantiles` | Borradores SGMS, documentos privados, validación de envío y RLS.          |
 
 ## Seguridad
 

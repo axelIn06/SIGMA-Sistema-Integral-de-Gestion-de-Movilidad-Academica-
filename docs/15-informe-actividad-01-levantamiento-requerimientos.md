@@ -42,11 +42,11 @@ Estados identificados: `NOMINADO`, `REGISTRO_PENDIENTE`, `POSTULACION_ENVIADA`, 
 
 ## 3. Actores y necesidades
 
-| Actor | Necesidad principal | Respuesta planteada en SIGMA |
-| --- | --- | --- |
-| Estudiante UNSAAC | Conocer oportunidades y seguir su postulación saliente. | Módulo SGMS con convocatorias, requisitos, documentos, observaciones y estado del expediente. |
-| Estudiante externo | Completar su proceso entrante después de ser nominado. | Módulo SGME con perfil, documentos, seguimiento y notificaciones de su expediente. |
-| Gestor externo | Nominar estudiantes de su universidad sin acceder a otras instituciones. | Panel limitado a nominaciones y expedientes de su propia universidad. |
+| Actor              | Necesidad principal                                                            | Respuesta planteada en SIGMA                                                                       |
+| ------------------ | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Estudiante UNSAAC  | Conocer oportunidades y seguir su postulación saliente.                        | Módulo SGMS con convocatorias, requisitos, documentos, observaciones y estado del expediente.      |
+| Estudiante externo | Completar su proceso entrante después de ser nominado.                         | Módulo SGME con perfil, documentos, seguimiento y notificaciones de su expediente.                 |
+| Gestor externo     | Nominar estudiantes de su universidad sin acceder a otras instituciones.       | Panel limitado a nominaciones y expedientes de su propia universidad.                              |
 | Administrador OCRI | Mantener el control transversal de movilidad y de los accesos institucionales. | Panel OCRI para universidades, dominios, gestores, convocatorias, requisitos, revisión y reportes. |
 
 ## 4. Información y documentos identificados
@@ -102,13 +102,13 @@ Con esta base se continúa con la siguiente actividad del plan: **diseño funcio
 
 ## 8. Evidencias y anexos del repositorio
 
-| Evidencia | Archivo |
-| --- | --- |
-| Visión y objetivos | `docs/01-vision.md` |
-| Módulos y estados | `docs/02-modulos.md` |
-| Flujo SGMS | `docs/03-flujos-sgms.md` |
-| Flujo SGME | `docs/04-flujos-sgme.md` |
-| Modelo de datos objetivo | `docs/05-modelo-datos.md` |
-| Roles y permisos vigentes | `docs/06-permisos-roles.md` |
-| Roadmap y backlog | `docs/07-roadmap.md`, `docs/11-product-backlog.md` |
-| Guía de autenticación y entorno local | `docs/13-guia-tecnica-login-y-datos.md` |
+| Evidencia                             | Archivo                                            |
+| ------------------------------------- | -------------------------------------------------- |
+| Visión y objetivos                    | `docs/01-vision.md`                                |
+| Módulos y estados                     | `docs/02-modulos.md`                               |
+| Flujo SGMS                            | `docs/03-flujos-sgms.md`                           |
+| Flujo SGME                            | `docs/04-flujos-sgme.md`                           |
+| Modelo de datos objetivo              | `docs/05-modelo-datos.md`                          |
+| Roles y permisos vigentes             | `docs/06-permisos-roles.md`                        |
+| Roadmap y backlog                     | `docs/07-roadmap.md`, `docs/11-product-backlog.md` |
+| Guía de autenticación y entorno local | `docs/13-guia-tecnica-login-y-datos.md`            |

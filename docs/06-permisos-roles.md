@@ -2,12 +2,12 @@
 
 SIGMA trabaja con cuatro roles operativos. El principio es de **mínimo privilegio**: cada persona ve y modifica únicamente lo que necesita para su proceso.
 
-| Rol | Forma de asignación | Alcance permitido |
-| --- | --- | --- |
-| `ADMIN_OCRI` | Cuenta global `ocri@unsaac.edu.pe` mediante bootstrap técnico único. | Administración transversal: universidades, dominios, gestores externos, convocatorias, requisitos, expedientes, decisiones y reportes. |
-| `ESTUDIANTE_UNSAAC` | Automática al confirmar un correo con dominio institucional UNSAAC aprobado. | SGMS: convocatorias salientes, su perfil, su postulación y sus documentos. |
-| `ESTUDIANTE_EXTERNO` | Automática al confirmar un correo de una universidad externa aprobada. | SGME: su invitación/nominación, perfil, postulación y documentos. |
-| `GESTOR_EXTERNO` | Designación directa de OCRI a una cuenta de universidad externa aprobada. | Solo SGME de su universidad: nominaciones y seguimiento de los expedientes que corresponden a su institución. |
+| Rol                  | Forma de asignación                                                          | Alcance permitido                                                                                                                      |
+| -------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `ADMIN_OCRI`         | Cuenta global `ocri@unsaac.edu.pe` mediante bootstrap técnico único.         | Administración transversal: universidades, dominios, gestores externos, convocatorias, requisitos, expedientes, decisiones y reportes. |
+| `ESTUDIANTE_UNSAAC`  | Automática al confirmar un correo con dominio institucional UNSAAC aprobado. | SGMS: convocatorias salientes, su perfil, su postulación y sus documentos.                                                             |
+| `ESTUDIANTE_EXTERNO` | Automática al confirmar un correo de una universidad externa aprobada.       | SGME: su invitación/nominación, perfil, postulación y documentos.                                                                      |
+| `GESTOR_EXTERNO`     | Designación directa de OCRI a una cuenta de universidad externa aprobada.    | Solo SGME de su universidad: nominaciones y seguimiento de los expedientes que corresponden a su institución.                          |
 
 No existe autoasignación ni solicitud pública de roles elevados. OCRI registra universidades y dominios asociados, y designa al gestor externo cuando corresponde.
 

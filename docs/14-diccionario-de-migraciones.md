@@ -1,111 +1,96 @@
 # Diccionario de migraciones de SIGMA
 
-Este documento explica cada migración sin alterar los archivos SQL que ya fueron aplicados. Las migraciones son historial ejecutable: se aplican una vez, en orden, y juntas reconstruyen la base de datos.
+El esquema base fue consolidado y las funcionalidades nuevas se añaden mediante migraciones incrementales coherentes. Una instalación nueva crea directamente el modelo vigente, sin crear columnas temporales para eliminarlas después.
 
 ## 20260810174010_identity_foundation.sql
 
-**Objetivo:** crear la identidad mínima de SIGMA.
+Construye identidad y acceso:
 
 ```text
-auth.users (Supabase Auth)
-        ↓ trigger
-profiles ── user_roles ── roles
-        ↓
-universities ── university_email_domains
+auth.users → profiles → user_roles → roles
+                    ↘ universities → university_email_domains
 ```
 
-- `account_status`: enum con `PENDIENTE`, `ACTIVO` y `SUSPENDIDO`.
-- `universities`: universidades vinculadas a movilidad. El índice parcial garantiza que solo exista una marcada como UNSAAC.
-- `roles`: catálogo de roles.
-- `profiles`: información pública-operativa de cada cuenta Auth; no contiene contraseñas.
-- `user_roles`: relación entre persona y rol.
-- `university_email_domains`: dominios institucionales autorizados.
-- `handle_new_user`: trigger que crea un perfil cuando Supabase Auth crea una cuenta.
-- `has_role`: función interna que consulta si la sesión tiene un rol.
-- RLS: un usuario solo ve su perfil y sus roles; el administrador puede ver los necesarios para administrar.
-- Seed: crea UNSAAC y `unsaac.edu.pe` como dominio verificado.
+- Crea los cuatro roles operativos: `ADMIN_OCRI`, `ESTUDIANTE_UNSAAC`, `GESTOR_EXTERNO` y `ESTUDIANTE_EXTERNO`.
+- Crea UNSAAC y `unsaac.edu.pe` como catálogo institucional inicial.
+- Vincula automáticamente cada cuenta con una universidad mediante el dominio verificado.
+- Asigna el rol base de estudiante después de confirmar el correo.
+- Conserva las contraseñas exclusivamente en Supabase Auth.
+- Permite editar nombre, teléfono, dirección y foto del propio perfil.
+- Crea el bucket privado `profile-photos`, limitado a imágenes de 5 MB.
+- Define RLS para que cada persona acceda a su perfil y OCRI administre los accesos autorizados.
 
-## 20260811100000_access_administration.sql
+Funciones principales:
 
-**Objetivo:** permitir administración sin exponer permisos críticos al navegador.
+- `has_role`: consulta segura utilizada por RLS.
+- `handle_new_user`: crea el perfil al registrarse una cuenta Auth.
+- `sync_profile_email_confirmation`: sincroniza la verificación y activa el rol estudiantil correspondiente.
+- `bootstrap_global_admin`: asigna una sola vez `ADMIN_OCRI` a `ocri@unsaac.edu.pe` ya confirmado.
+- `admin_set_user_role`: permite que OCRI designe un gestor externo.
+- `admin_set_account_status`: cambia el estado de una cuenta sin permitir que el administrador se suspenda a sí mismo.
+- `admin_create_university_with_domain`: registra una universidad y su dominio aprobado.
+- `is_registration_domain_approved`: evita enviar correos de registro a dominios sin convenio.
 
-- `bootstrap_global_admin()`: se ejecuta una sola vez desde una conexión técnica. Busca `ocri@unsaac.edu.pe` confirmado, le asigna `ADMIN_OCRI` y lo activa. La función no tiene permiso para `anon` ni `authenticated`.
-- `admin_set_user_role(user_id, role)`: solo funciona si la sesión ya es `ADMIN_OCRI`. Asigna un único rol operativo y activa la cuenta.
-- `admin_set_account_status(user_id, status)`: permite activar, dejar pendiente o suspender. Evita que el administrador se suspenda a sí mismo.
+## 20260818120000_convocatorias.sql
 
-La palabra `security definer` significa que la función puede realizar el cambio en tablas protegidas, pero primero valida explícitamente quién llamó a la función. No es una puerta abierta.
+Construye el módulo real de convocatorias:
 
-## 20260811113000_email_verification_and_password_setup.sql
+```text
+calls
+├── call_guidelines
+├── call_requirements
+├── call_resources
+└── call_notices ── call_notice_links
+```
 
-**Objetivo:** separar verificación de correo y contraseña.
+- `calls`: información general, periodo, fecha límite, dirección, estado y portada.
+- `call_guidelines`: requisitos generales mostrados como viñetas.
+- `call_requirements`: documentos que deberá presentar el postulante.
+- `call_resources`: brochures, cartas y otros materiales descargables de OCRI.
+- `call_notice_links`: textos y enlaces opcionales de información importante.
+- `call-assets`: bucket privado para portadas y materiales.
+- `admin_upsert_call`: crea o actualiza toda la convocatoria en una transacción.
+- `admin_delete_call`: elimina la convocatoria y sus registros relacionados.
 
-- Agrega `profiles.password_configured_at`: solo marca cuándo la persona terminó de definir su contraseña; la contraseña sigue almacenada exclusivamente por Supabase Auth.
-- `sync_profile_email_confirmation`: escucha cuando `auth.users.email_confirmed_at` cambia y copia esa fecha a `profiles.email_verified_at`.
-- El `update` final sincroniza cuentas creadas antes del trigger.
+Las políticas permiten que cualquier usuario autenticado consulte convocatorias activas y sus materiales. Los borradores y operaciones de escritura quedan reservados para `ADMIN_OCRI`.
 
-Esto permite el flujo: correo verificado por enlace una vez → contraseña personal para ingresos posteriores.
+## 20260827113000_postulaciones_estudiantiles.sql
 
-## 20260811130000_university_domain_enforcement.sql
+Construye el primer flujo real de postulaciones SGMS:
 
-**Objetivo:** relacionar una cuenta con su universidad según su dominio y evitar autoedición sensible.
+```text
+profiles ── applications ── calls
+                │
+                └── application_documents ── call_requirements
+```
 
-- Reemplaza `handle_new_user` para buscar el dominio del correo en `university_email_domains`.
-- Si el dominio está activo y verificado, asigna `university_id` al perfil recién creado.
-- Revoca actualización general de `profiles` a usuarios autenticados.
-- Solo permite actualizar `full_name` y `password_configured_at`; universidad, estado y verificación son controlados por servidor.
-- Agrega `admin_create_university_with_domain`: solo `ADMIN_OCRI` puede crear una universidad externa y aprobar su dominio. También vincula cuentas pendientes ya existentes de ese dominio.
-- Fortalece `admin_set_user_role` para exigir dominio UNSAAC en roles internos y dominio externo aprobado en roles externos.
+- `applications`: conserva datos académicos, presentación, etapa actual y estado del expediente.
+- `application_documents`: vincula cada archivo privado con el documento solicitado por la convocatoria.
+- `student_save_application_draft`: crea o actualiza el borrador y sincroniza sus documentos requeridos.
+- `student_submit_application`: entrega el expediente únicamente después de superar las validaciones.
+- `validate_application_submission`: bloquea el envío si falta foto, información académica, presentación o algún archivo obligatorio.
+- `application-documents`: bucket privado organizado por UUID del estudiante y de su expediente.
 
-## 20260811131500_fix_domain_validation.sql
+RLS permite que cada estudiante consulte y modifique únicamente sus propios borradores. OCRI puede consultar los expedientes; ningún estudiante puede acceder a archivos pertenecientes a otra cuenta.
 
-**Objetivo:** corrección técnica de la migración anterior.
+## 20260828152459_harden_function_execute_privileges.sql
 
-En PL/pgSQL, una variable y una columna con el mismo nombre podían ser ambiguas. Esta migración reemplaza la función con nombres inequívocos y actualiza perfiles existentes para asociarlos al dominio institucional ya aprobado. No agrega una regla de negocio nueva.
+Completa el endurecimiento del esquema antes de usarlo en el entorno remoto:
 
-## 20260811140000_automatic_student_access_and_role_requests.sql
+- Revoca la ejecución pública de funciones internas y de triggers.
+- Expone cada RPC únicamente al rol que necesita invocarlo.
+- Mantiene pública solo la comprobación previa del dominio de registro, que no devuelve información personal.
+- Añade índices a claves foráneas de perfiles, convocatorias y documentos para evitar búsquedas completas al relacionar o eliminar registros.
 
-**Objetivo original:** automatizar el rol base después de verificar correo.
-
-- Agrega `GESTOR_OCRI` de manera temporal.
-- `assign_default_student_access(user_id)`: si la cuenta está confirmada, pendiente, sin rol y su dominio está aprobado, la activa como `ESTUDIANTE_UNSAAC` o `ESTUDIANTE_EXTERNO`.
-- Actualiza el trigger de confirmación para llamar a esa función.
-- Agrega inicialmente tablas para solicitudes de roles elevados.
-
-Las solicitudes y el rol temporal `GESTOR_OCRI` fueron decisiones reemplazadas en migraciones posteriores. Se conserva esta migración porque forma parte del historial ya ejecutado.
-
-## 20260811150000_simplify_operational_roles.sql
-
-**Objetivo:** dejar solo los cuatro roles aprobados por OCRI.
-
-- Elimina `EVALUADOR_OCRI` y `GESTOR_OCRI`.
-- Elimina asignaciones o solicitudes asociadas a esos roles antes de borrar sus filas, para respetar claves foráneas.
-- Ajusta `admin_set_user_role` para permitir solo:
-  - `ADMIN_OCRI` con el correo global OCRI;
-  - `ESTUDIANTE_UNSAAC` con dominio UNSAAC;
-  - `ESTUDIANTE_EXTERNO` y `GESTOR_EXTERNO` con dominio externo aprobado.
-
-## 20260811160000_remove_role_requests.sql
-
-**Objetivo:** eliminar las solicitudes de rol.
-
-OCRI decidió que el gestor externo no se solicita: la oficina lo designa directamente. Por ello esta migración revoca la ejecución de la función de decisión, elimina la tabla de solicitudes, su trigger de validación y el enum de estados.
-
-## 20260811170000_restrict_registration_to_approved_domains.sql
-
-**Objetivo:** bloquear el registro antes de enviar correo a dominios no asociados.
-
-- `is_registration_domain_approved(email)`: devuelve verdadero solo si el dominio extraído del correo figura activo y verificado.
-- La función es `security definer` para que una persona sin sesión pueda preguntar si puede iniciar el registro, sin obtener acceso directo a las tablas de dominios.
-- Solo se concede `execute`; no se concede lectura de tablas.
-- El frontend la llama antes de `signInWithOtp`. Por ello Gmail, Hotmail o dominios sin convenio no reciben enlace ni crean cuenta.
+Esta migración no cambia los datos funcionales; reduce la superficie de acceso y mejora el comportamiento del esquema al crecer.
 
 ## Cómo leer el SQL
 
 - `create table`: crea una entidad y sus columnas.
-- `references`: crea una relación con otra tabla y evita referencias inexistentes.
-- `create function`: define lógica que se ejecuta dentro de PostgreSQL.
-- `create trigger`: ejecuta una función automáticamente ante un evento, por ejemplo crear o confirmar una cuenta.
-- `enable row level security`: activa la barrera de permisos por fila.
-- `create policy`: expresa quién puede leer, insertar o modificar cada fila.
-- `grant execute`: permite invocar una función, no leer o editar sus tablas libremente.
-- `security definer`: ejecuta una función con privilegios controlados; por eso cada función administrativa valida `auth.uid()` y `has_role('ADMIN_OCRI')`.
+- `references`: relaciona tablas y evita referencias inexistentes.
+- `on delete cascade`: elimina automáticamente los registros hijos de una convocatoria.
+- `create function`: agrupa lógica que PostgreSQL ejecuta de forma controlada.
+- `create trigger`: ejecuta una función automáticamente ante un evento.
+- `enable row level security`: activa la protección por fila.
+- `create policy`: define qué filas puede leer o modificar cada sesión.
+- `grant execute`: permite invocar una función sin conceder acceso general a las tablas.

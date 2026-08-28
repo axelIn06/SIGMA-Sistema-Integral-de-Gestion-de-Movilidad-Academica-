@@ -1,0 +1,12 @@
+# Generated or binary resources
+node_modules/
+dist/
+*.docx
+*.png
+*.webp
+.DS_Store
+
+# Supabase local runtime and SQL migrations are maintained as executable scripts.
+supabase/.temp/
+supabase/config.toml
+supabase/migrations/*.sql
