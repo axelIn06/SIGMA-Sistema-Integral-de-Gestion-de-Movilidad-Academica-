@@ -124,7 +124,6 @@ async function mapDatabaseCall(call) {
     period: call.period,
     end: call.closes_on,
     status: call.status,
-    description: call.student_description,
     coverImagePath: call.cover_image_path || '',
     coverImage: cover?.data?.signedUrl || '',
     coverName: call.cover_image_path?.split('/').at(-1) || '',
@@ -150,7 +149,7 @@ async function loadCallsFromDatabase() {
   const { data, error } = await supabase
     .from('calls')
     .select(
-      'id,code,title,direction,period,closes_on,status,student_description,cover_image_path,call_guidelines(content,display_order),call_requirements(id,title,description,is_required,display_order),call_resources(description,file_name,storage_path,display_order),call_notices(call_notice_links(label,url,display_order))',
+      'id,code,title,direction,period,closes_on,status,cover_image_path,call_guidelines(content,display_order),call_requirements(id,title,description,is_required,display_order),call_resources(description,file_name,storage_path,display_order),call_notices(call_notice_links(label,url,display_order))',
     )
     .order('created_at', { ascending: false });
 
@@ -1093,9 +1092,6 @@ function studentDashboard() {
       <article class="card opportunity-card">
         <div class="eyebrow">Convocatoria abierta</div>
         <h2>${esc(call?.title || 'Movilidad académica')}</h2>
-        <p>
-          ${esc(call?.description || 'Revisa los requisitos, documentos y plazos de la convocatoria.')}
-        </p>
         <button class="btn btn-primary" onclick="go('calls')">Ver y postular</button>
       </article>
       <aside class="priority-card">
@@ -1543,7 +1539,6 @@ function callModal() {
     direction: 'SALIENTE',
     period: nextAcademicPeriod(),
     end: '',
-    description: '',
     coverImage: '',
     coverName: '',
     guidelinesText: '',
@@ -1596,7 +1591,6 @@ function syncCallDraft() {
     callDraft.direction = text('direction', callDraft.direction);
     callDraft.period = text('period', callDraft.period);
     callDraft.end = text('end', callDraft.end);
-    callDraft.description = text('description', callDraft.description);
   }
   if (has('guidelines_text')) {
     callDraft.guidelinesText = text('guidelines_text', callDraft.guidelinesText);
@@ -1734,11 +1728,6 @@ function wizardInformation() {
       <div class="field wide">
         <label>Fecha límite de postulación</label
         ><input class="input" type="date" name="end" value="${esc(callDraft.end)}" required />
-      </div>
-      <div class="field wide">
-        <label>Descripción para estudiantes</label
-        ><textarea class="input" name="description" required>
-${esc(callDraft.description)}</textarea>
       </div>
     </div>
     ${wizardActions('Continuar a requisitos', 'goCallWizardStep(2)')}`;
@@ -1926,8 +1915,8 @@ function wizardReview() {
   const checks = [
     [
       'Información general',
-      Boolean(callDraft.title && callDraft.end && callDraft.description),
-      callDraft.title || 'Completa nombre, fecha límite y descripción.',
+      Boolean(callDraft.title && callDraft.end),
+      callDraft.title || 'Completa el nombre y la fecha límite.',
     ],
     [
       'Requisitos generales',
@@ -1994,8 +1983,8 @@ function wizardActions(nextLabel, nextAction, backLabel = 'Cancelar', backAction
 }
 function goCallWizardStep(step) {
   syncCallDraft();
-  if (step === 2 && !(callDraft.title && callDraft.end && callDraft.description))
-    return toast('Completa el nombre, la fecha límite y la descripción antes de continuar.');
+  if (step === 2 && !(callDraft.title && callDraft.end))
+    return toast('Completa el nombre y la fecha límite antes de continuar.');
   if (step === 3 && !callDraft.guidelines.some(Boolean))
     return toast('Pega o escribe al menos un requisito general.');
   if (
@@ -2097,7 +2086,6 @@ async function saveCallDraft(status) {
   const valid =
     callDraft.title &&
     callDraft.end &&
-    callDraft.description &&
     callDraft.guidelines.some(Boolean) &&
     callDraft.documents.length &&
     callDraft.documents.every((item) => item.title);
@@ -2221,10 +2209,6 @@ function showCallSummary(id) {
         </div>
       </div>
       <div class="call-detail-content">
-        <section class="call-detail-introduction">
-          <div class="eyebrow">Sobre la oportunidad</div>
-          <p>${esc(call.description)}</p>
-        </section>
         <div class="call-detail-columns">
           <section class="call-detail-section">
             <span class="call-detail-number">01</span>

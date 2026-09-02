@@ -970,15 +970,6 @@ textarea:focus-visible {
   gap: 22px;
   padding: 30px 38px 12px;
 }
-.call-detail-introduction {
-  max-width: 780px;
-}
-.call-detail-introduction p {
-  margin: 7px 0 0;
-  color: var(--ink);
-  font-size: 15px;
-  line-height: 1.65;
-}
 .call-detail-columns {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
