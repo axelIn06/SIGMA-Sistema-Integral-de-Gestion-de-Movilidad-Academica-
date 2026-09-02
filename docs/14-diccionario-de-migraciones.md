@@ -64,11 +64,11 @@ profiles ── applications ── calls
                 └── application_documents ── call_requirements
 ```
 
-- `applications`: conserva datos académicos, presentación, etapa actual y estado del expediente.
+- `applications`: conserva datos académicos y el estado del expediente.
 - `application_documents`: vincula cada archivo privado con el documento solicitado por la convocatoria.
 - `student_save_application_draft`: crea o actualiza el borrador y sincroniza sus documentos requeridos.
 - `student_submit_application`: entrega el expediente únicamente después de superar las validaciones.
-- `validate_application_submission`: bloquea el envío si falta foto, información académica, presentación o algún archivo obligatorio.
+- `validate_application_submission`: bloquea el envío si falta foto, información académica válida o algún archivo obligatorio.
 - `application-documents`: bucket privado organizado por UUID del estudiante y de su expediente.
 
 RLS permite que cada estudiante consulte y modifique únicamente sus propios borradores. OCRI puede consultar los expedientes; ningún estudiante puede acceder a archivos pertenecientes a otra cuenta.
@@ -87,6 +87,16 @@ Esta migración no cambia los datos funcionales; reduce la superficie de acceso 
 ## 20260828183000_sync_security_and_fk_indexes.sql
 
 Replica de forma incremental los permisos internos y los índices de claves foráneas incorporados durante la limpieza. Es necesaria porque la versión anterior ya estaba registrada en Supabase Cloud: una migración aplicada no se edita para intentar ejecutarla nuevamente, sino que se añade otra versión reproducible e idempotente.
+
+## 20260902175127_simplify_student_applications.sql
+
+Simplifica la postulación SGMS y añade el catálogo académico institucional:
+
+- Registra 18 facultades y sus escuelas profesionales o filiales vigentes.
+- Permite que usuarios autenticados consulten el catálogo, con RLS activo y sin escritura desde el navegador.
+- Elimina `motivation` y `current_step`, porque el expediente se completa en una sola pantalla documental.
+- Obtiene `student_code` del prefijo del correo autenticado; el navegador no puede elegirlo ni alterarlo.
+- Valida en PostgreSQL que la escuela seleccionada pertenezca a la facultad indicada.
 
 ## Cómo leer el SQL
 

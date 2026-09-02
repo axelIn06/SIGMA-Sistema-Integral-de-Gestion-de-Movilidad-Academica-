@@ -46,7 +46,7 @@ let callWizardStep = 1;
 let editingCallId = null;
 let pendingProfilePhotoPreview = '';
 let applicationDraft = null;
-let applicationWizardStep = 1;
+let academicCatalog = [];
 const pendingApplicationFiles = new Map();
 
 // Permite usar plantillas HTML formateadas sin alterar sus interpolaciones.
@@ -167,7 +167,7 @@ async function loadApplicationsFromDatabase() {
   const { data, error } = await supabase
     .from('applications')
     .select(
-      'id,call_id,applicant_id,status,student_code,faculty,academic_program,motivation,current_step,submitted_at,created_at,calls(title,direction,period),profiles!applications_applicant_id_fkey(full_name,email),application_documents(id,requirement_id,requirement_title,is_required,storage_path,file_name,status,reviewer_comment)',
+      'id,call_id,applicant_id,status,student_code,faculty,academic_program,submitted_at,created_at,calls(title,direction,period),profiles!applications_applicant_id_fkey(full_name,email),application_documents(id,requirement_id,requirement_title,is_required,storage_path,file_name,status,reviewer_comment)',
     )
     .order('updated_at', { ascending: false });
 
@@ -180,13 +180,10 @@ async function loadApplicationsFromDatabase() {
   state.applications = data.map((application) => {
     const documents = application.application_documents || [];
     const completedDocuments = documents.filter((document) => document.storage_path).length;
-    const completedFields = [
-      application.student_code,
-      application.faculty,
-      application.academic_program,
-      application.motivation,
-    ].filter(Boolean).length;
-    const totalParts = 4 + documents.length;
+    const completedFields = [application.faculty, application.academic_program].filter(
+      Boolean,
+    ).length;
+    const totalParts = 2 + documents.length;
     const progress = Math.round(
       ((completedFields + completedDocuments) / Math.max(totalParts, 1)) * 100,
     );
@@ -204,8 +201,6 @@ async function loadApplicationsFromDatabase() {
       academicProgram: application.academic_program || '',
       destination: application.calls?.title || 'Convocatoria',
       callTitle: application.calls?.title || 'Convocatoria',
-      motivation: application.motivation || '',
-      currentStep: application.current_step || 1,
       status: application.status,
       submitted: date ? shortDate(String(date).slice(0, 10)) : 'Borrador',
       progress,
@@ -227,6 +222,36 @@ async function loadApplicationsFromDatabase() {
       ],
     };
   });
+}
+
+async function loadAcademicCatalog() {
+  if (!supabase || !session || session.role !== 'student') {
+    academicCatalog = [];
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from('unsaac_faculties')
+    .select(
+      'code,name,display_order,unsaac_professional_schools(code,name,display_order,is_active)',
+    )
+    .eq('is_active', true)
+    .order('display_order')
+    .order('display_order', {
+      referencedTable: 'unsaac_professional_schools',
+    });
+
+  if (error) {
+    console.warn('No se pudo cargar el catálogo académico UNSAAC.', error.message);
+    academicCatalog = [];
+    return;
+  }
+
+  academicCatalog = data.map((faculty) => ({
+    code: faculty.code,
+    name: faculty.name,
+    schools: (faculty.unsaac_professional_schools || []).filter((school) => school.is_active),
+  }));
 }
 
 async function uploadDataUrl(dataUrl, path) {
@@ -533,8 +558,11 @@ async function loadSession(user) {
   };
   if (passwordRecoveryMode || !profileResult.password_configured_at) return passwordSetup();
   if (previousUserId !== user.id) route = 'dashboard';
-  await loadCallsFromDatabase();
-  await loadApplicationsFromDatabase();
+  await Promise.all([
+    loadCallsFromDatabase(),
+    loadApplicationsFromDatabase(),
+    loadAcademicCatalog(),
+  ]);
   render();
 }
 function portalMeta() {
@@ -2461,17 +2489,26 @@ async function startApplication(callId) {
   );
   if (existing && existing.status !== 'BORRADOR') return openExistingApplication(existing.id);
 
+  if (!academicCatalog.length) {
+    await loadAcademicCatalog();
+    if (!academicCatalog.length)
+      return toast('No se pudo cargar el catálogo de facultades y escuelas profesionales.');
+  }
+
+  const existingFaculty = academicCatalog.find((faculty) => faculty.name === existing?.faculty);
+  const existingSchool = existingFaculty?.schools.find(
+    (school) => school.name === existing?.academicProgram,
+  );
+
   pendingApplicationFiles.clear();
   applicationDraft = {
     id: existing?.id || '',
     callId,
     callTitle: call.title,
     period: call.period,
-    studentCode: existing?.code === 'Pendiente' ? '' : existing?.code || '',
-    faculty: existing?.faculty === 'Pendiente' ? '' : existing?.faculty || '',
-    academicProgram: existing?.academicProgram || '',
-    motivation: existing?.motivation || '',
-    currentStep: existing?.currentStep || 1,
+    studentCode: session.email.split('@')[0].toLowerCase(),
+    facultyCode: existingFaculty?.code || '',
+    schoolCode: existingSchool?.code || '',
     status: existing?.status || 'BORRADOR',
     documents: existing?.documents?.length
       ? structuredClone(existing.documents)
@@ -2485,7 +2522,6 @@ async function startApplication(callId) {
           status: 'PENDIENTE',
         })),
   };
-  applicationWizardStep = Math.min(existing?.currentStep || 1, 4);
   renderApplicationWizard();
 }
 
@@ -2501,22 +2537,23 @@ function syncApplicationDraft() {
   const form = $('#applicationWizardForm');
   if (!form || !applicationDraft) return;
   const data = new FormData(form);
-  if (form.elements.namedItem('studentCode'))
-    applicationDraft.studentCode = String(data.get('studentCode') || '').trim();
-  if (form.elements.namedItem('faculty'))
-    applicationDraft.faculty = String(data.get('faculty') || '').trim();
-  if (form.elements.namedItem('academicProgram'))
-    applicationDraft.academicProgram = String(data.get('academicProgram') || '').trim();
-  if (form.elements.namedItem('motivation'))
-    applicationDraft.motivation = String(data.get('motivation') || '').trim();
+  if (form.elements.namedItem('facultyCode'))
+    applicationDraft.facultyCode = String(data.get('facultyCode') || '').trim();
+  if (form.elements.namedItem('schoolCode'))
+    applicationDraft.schoolCode = String(data.get('schoolCode') || '').trim();
 }
 
 function applicationNavigation() {
-  const steps = ['Datos académicos', 'Presentación', 'Documentos', 'Revisión'];
   return html`<aside class="wizard-route application-route">
-    <div class="eyebrow">Ruta de postulación</div>
+    <div class="eyebrow">Postulación SGMS</div>
     <h3>${esc(applicationDraft.callTitle)}</h3>
-    ${steps.map((label, index) => html`<button type="button" class="${applicationWizardStep === index + 1 ? 'active' : ''} ${applicationDraft.currentStep > index + 1 ? 'done' : ''}" onclick="goApplicationWizardStep(${index + 1})"><span>0${index + 1}</span>${label}</button>`).join('')}
+    <div class="application-route-summary">
+      <span>01</span>
+      <div>
+        <strong>Documentos</strong>
+        <small>Completa tus datos académicos y adjunta el expediente solicitado.</small>
+      </div>
+    </div>
     <div class="application-draft-note">
       <strong>Borrador privado</strong>
       <span>Tu avance se guarda en tu cuenta y puedes continuar después.</span>
@@ -2525,18 +2562,6 @@ function applicationNavigation() {
 }
 
 function renderApplicationWizard() {
-  const content = [
-    applicationAcademicStep,
-    applicationPresentationStep,
-    applicationDocumentsStep,
-    applicationReviewStep,
-  ][applicationWizardStep - 1]();
-  const titles = [
-    '01 · Datos académicos',
-    '02 · Presentación y motivación',
-    '03 · Documentos solicitados',
-    '04 · Revisión y envío',
-  ];
   const body = html`<div class="wizard-shell">
     <header class="wizard-header">
       <div class="wizard-header-start">
@@ -2554,13 +2579,13 @@ function renderApplicationWizard() {
         <div class="modal-head">
           <div>
             <div class="eyebrow">SGMS / ${esc(applicationDraft.callTitle)}</div>
-            <h2>${titles[applicationWizardStep - 1]}</h2>
+            <h2>Postulación y documentos</h2>
           </div>
           <button class="wizard-exit" onclick="saveApplicationDraftAndExit()">
             Guardar y salir
           </button>
         </div>
-        <form id="applicationWizardForm" onsubmit="return false">${content}</form>
+        <form id="applicationWizardForm" onsubmit="return false">${applicationForm()}</form>
       </section>
     </div>
   </div>`;
@@ -2571,7 +2596,21 @@ function renderApplicationWizard() {
   } else modal(body, 'application-wizard');
 }
 
-function applicationAcademicStep() {
+function applicationForm() {
+  const selectedFaculty = academicCatalog.find(
+    (faculty) => faculty.code === applicationDraft.facultyCode,
+  );
+  const schools = selectedFaculty?.schools || [];
+  const requiredDocuments = applicationDraft.documents.filter((document) => document.required);
+  const completedRequired = requiredDocuments.filter(
+    (document) => document.storagePath || pendingApplicationFiles.has(document.requirementId),
+  ).length;
+  const complete = Boolean(
+    applicationDraft.facultyCode &&
+    applicationDraft.schoolCode &&
+    completedRequired === requiredDocuments.length,
+  );
+
   return html`<div class="application-profile-strip">
       <span class="sidebar-avatar">
         ${session.photoUrl ? html`<img src="${esc(session.photoUrl)}" alt="" />` : esc(session.initials)}
@@ -2579,147 +2618,103 @@ function applicationAcademicStep() {
       <div><strong>${esc(session.name)}</strong><small>${esc(session.email)}</small></div>
       <span class="application-photo-ok">✓ Foto registrada</span>
     </div>
-    <div class="form-grid application-form-grid">
-      <div class="field">
-        <label>Código de estudiante</label
-        ><input
-          class="input"
-          name="studentCode"
-          value="${esc(applicationDraft.studentCode)}"
-          placeholder="Ej. 200123"
-          required
-        />
-      </div>
-      <div class="field">
-        <label>Facultad</label
-        ><input
-          class="input"
-          name="faculty"
-          value="${esc(applicationDraft.faculty)}"
-          placeholder="Ej. Ingeniería"
-          required
-        />
-      </div>
-      <div class="field wide">
-        <label>Escuela profesional</label
-        ><input
-          class="input"
-          name="academicProgram"
-          value="${esc(applicationDraft.academicProgram)}"
-          placeholder="Ej. Ingeniería Informática y de Sistemas"
-          required
-        />
-      </div>
-    </div>
-    ${applicationWizardActions('Continuar a presentación', 2)}`;
-}
-
-function applicationPresentationStep() {
-  return html`<div class="presentation-prompt">
-      <span>Orientación</span>
-      <p>Resume tus objetivos académicos y el aporte del intercambio para tu carrera.</p>
-    </div>
-    <div class="field">
-      <label>Presentación y motivación</label
-      ><textarea
-        class="input application-motivation"
-        name="motivation"
-        maxlength="2500"
-        placeholder="Escribe tu presentación…"
-        required
-      >
-${esc(applicationDraft.motivation)}</textarea
-      ><small class="field-help">Máximo 2500 caracteres.</small>
-    </div>
-    ${applicationWizardActions('Continuar a documentos', 3, 'Volver', 1)}`;
-}
-
-function applicationDocumentsStep() {
-  const documents = applicationDraft.documents || [];
-  return html`<p class="wizard-intro">Adjunta los documentos solicitados por OCRI.</p>
-    <div class="application-document-list">
-      ${
-        documents.length
-          ? documents
-              .map((document, index) => {
-                const pendingFile = pendingApplicationFiles.get(document.requirementId);
-                const fileName = pendingFile?.name || document.fileName;
-                return html`<article class="application-document ${fileName ? 'is-ready' : ''}">
-                  <div class="application-document-icon">
-                    ${fileName ? '✓' : String(index + 1).padStart(2, '0')}
-                  </div>
-                  <div class="application-document-copy">
-                    <strong>${esc(document.name)}</strong>
-                    <small
-                      >${document.required ? 'Obligatorio' : 'Opcional'}${fileName ? ` · ${esc(fileName)}` : ' · Pendiente de adjuntar'}</small
-                    >
-                  </div>
-                  <label class="btn btn-soft btn-sm application-upload-button">
-                    ${fileName ? 'Reemplazar' : 'Adjuntar'}
-                    <input
-                      type="file"
-                      accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                      onchange="selectApplicationDocument(this, '${document.requirementId}')"
-                    />
-                  </label>
-                </article>`;
-              })
-              .join('')
-          : '<div class="wizard-empty">Esta convocatoria no solicita documentos.</div>'
-      }
-    </div>
-    <p class="application-security-note">
-      🔒 Los archivos son privados y solo podrán verlos tú y el personal autorizado de OCRI.
-    </p>
-    ${applicationWizardActions('Revisar postulación', 4, 'Volver', 2)}`;
-}
-
-function applicationReviewStep() {
-  const requiredDocuments = applicationDraft.documents.filter((document) => document.required);
-  const completedRequired = requiredDocuments.filter(
-    (document) => document.storagePath || pendingApplicationFiles.has(document.requirementId),
-  ).length;
-  const academicComplete = Boolean(
-    applicationDraft.studentCode && applicationDraft.faculty && applicationDraft.academicProgram,
-  );
-  const presentationComplete = Boolean(applicationDraft.motivation);
-  const documentsComplete = completedRequired === requiredDocuments.length;
-  const complete = academicComplete && presentationComplete && documentsComplete;
-  return html`<p class="wizard-intro">Verifica tu expediente antes de enviarlo a OCRI.</p>
-    <div class="application-review-grid">
-      <article class="application-review-card ${academicComplete ? 'complete' : ''}">
-        <span>${academicComplete ? '✓' : '!'}</span>
+    <section class="application-section">
+      <div class="application-section-heading">
+        <span>01</span>
         <div>
-          <strong>Datos académicos</strong
-          ><small
-            >${academicComplete ? `${esc(applicationDraft.academicProgram)} · ${esc(applicationDraft.faculty)}` : 'Faltan datos por completar.'}</small
+          <h3>Datos académicos</h3>
+          <p>El código se obtiene automáticamente de tu correo institucional.</p>
+        </div>
+      </div>
+      <div class="form-grid application-form-grid">
+        <div class="field">
+          <label>Código de estudiante</label>
+          <input
+            class="input"
+            name="studentCode"
+            value="${esc(applicationDraft.studentCode)}"
+            readonly
+          />
+        </div>
+        <div class="field">
+          <label>Facultad</label>
+          <select
+            class="input"
+            name="facultyCode"
+            onchange="changeApplicationFaculty(this.value)"
+            required
           >
+            <option value="">Selecciona tu facultad</option>
+            ${academicCatalog.map((faculty) => html`<option value="${esc(faculty.code)}" ${faculty.code === applicationDraft.facultyCode ? 'selected' : ''}>${esc(faculty.name)}</option>`).join('')}
+          </select>
         </div>
-      </article>
-      <article class="application-review-card ${presentationComplete ? 'complete' : ''}">
-        <span>${presentationComplete ? '✓' : '!'}</span>
-        <div>
-          <strong>Presentación</strong
-          ><small
-            >${presentationComplete ? 'Texto de motivación registrado.' : 'Falta escribir tu presentación.'}</small
+        <div class="field wide">
+          <label>Escuela profesional</label>
+          <select
+            class="input"
+            name="schoolCode"
+            onchange="changeApplicationSchool(this.value)"
+            ${selectedFaculty ? '' : 'disabled'}
+            required
           >
+            <option value="">
+              ${selectedFaculty ? 'Selecciona tu escuela profesional' : 'Selecciona primero una facultad'}
+            </option>
+            ${schools.map((school) => html`<option value="${esc(school.code)}" ${school.code === applicationDraft.schoolCode ? 'selected' : ''}>${esc(school.name)}</option>`).join('')}
+          </select>
         </div>
-      </article>
-      <article class="application-review-card ${documentsComplete ? 'complete' : ''}">
-        <span>${documentsComplete ? '✓' : '!'}</span>
+      </div>
+    </section>
+    <section class="application-section">
+      <div class="application-section-heading">
+        <span>02</span>
         <div>
-          <strong>Documentos</strong
-          ><small>${completedRequired} de ${requiredDocuments.length} obligatorios adjuntos.</small>
+          <h3>Documentos a presentar</h3>
+          <p>Adjunta únicamente los archivos solicitados por OCRI.</p>
         </div>
-      </article>
-    </div>
+      </div>
+      <div class="application-document-list">
+        ${
+          applicationDraft.documents.length
+            ? applicationDraft.documents
+                .map((document, index) => {
+                  const pendingFile = pendingApplicationFiles.get(document.requirementId);
+                  const fileName = pendingFile?.name || document.fileName;
+                  return html`<article class="application-document ${fileName ? 'is-ready' : ''}">
+                    <div class="application-document-icon">
+                      ${fileName ? '✓' : String(index + 1).padStart(2, '0')}
+                    </div>
+                    <div class="application-document-copy">
+                      <strong>${esc(document.name)}</strong>
+                      <small
+                        >${document.required ? 'Obligatorio' : 'Opcional'}${fileName ? ` · ${esc(fileName)}` : ' · Pendiente de adjuntar'}</small
+                      >
+                    </div>
+                    <label class="btn btn-soft btn-sm application-upload-button">
+                      ${fileName ? 'Reemplazar' : 'Adjuntar'}
+                      <input
+                        type="file"
+                        accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                        onchange="selectApplicationDocument(this, '${document.requirementId}')"
+                      />
+                    </label>
+                  </article>`;
+                })
+                .join('')
+            : '<div class="wizard-empty">Esta convocatoria no solicita documentos.</div>'
+        }
+      </div>
+      <p class="application-security-note">
+        🔒 Los archivos son privados y solo podrán verlos tú y el personal autorizado de OCRI.
+      </p>
+    </section>
     <div class="application-submit-panel">
       <div>
         <strong
           >${complete ? 'Tu postulación está lista' : 'Tu borrador todavía está incompleto'}</strong
         >
         <p>
-          ${complete ? 'Al enviar, OCRI recibirá el expediente para revisión.' : 'Puedes guardarlo ahora y continuar en otro momento.'}
+          ${complete ? `${completedRequired} de ${requiredDocuments.length} documentos obligatorios listos para enviar.` : 'Selecciona tu escuela y adjunta todos los documentos obligatorios. Puedes guardar y continuar después.'}
         </p>
       </div>
       <button
@@ -2731,42 +2726,29 @@ function applicationReviewStep() {
         Enviar postulación
       </button>
     </div>
-    ${applicationWizardActions('', 0, 'Volver', 3)}`;
+    <div class="modal-actions application-wizard-actions">
+      <button class="btn btn-soft" type="button" onclick="saveApplicationDraftAndExit()">
+        Guardar y continuar después
+      </button>
+    </div>`;
 }
 
-function applicationWizardActions(nextLabel, nextStep, backLabel = 'Volver', backStep = 0) {
-  return html`<div class="modal-actions application-wizard-actions">
-    <button class="btn btn-soft" type="button" onclick="saveApplicationDraftAndExit()">
-      Guardar y continuar después
-    </button>
-    <span></span>
-    ${backStep ? html`<button class="btn btn-soft" type="button" onclick="goApplicationWizardStep(${backStep})">${backLabel}</button>` : ''}
-    ${nextStep ? html`<button class="btn btn-primary" type="button" onclick="goApplicationWizardStep(${nextStep})">${nextLabel}</button>` : ''}
-  </div>`;
-}
-
-async function goApplicationWizardStep(step) {
+function changeApplicationFaculty(facultyCode) {
   syncApplicationDraft();
-  if (step > applicationWizardStep) {
-    if (
-      applicationWizardStep === 1 &&
-      (!applicationDraft.studentCode ||
-        !applicationDraft.faculty ||
-        !applicationDraft.academicProgram)
-    )
-      return toast('Completa los datos académicos para continuar.');
-    if (applicationWizardStep === 2 && !applicationDraft.motivation)
-      return toast('Escribe tu presentación para continuar.');
-  }
-  const saved = await persistApplicationDraft(Math.max(applicationDraft.currentStep, step));
-  if (!saved) return;
-  applicationWizardStep = step;
+  applicationDraft.facultyCode = facultyCode;
+  applicationDraft.schoolCode = '';
+  renderApplicationWizard();
+}
+
+function changeApplicationSchool(schoolCode) {
+  applicationDraft.schoolCode = schoolCode;
   renderApplicationWizard();
 }
 
 function selectApplicationDocument(input, requirementId) {
   const file = input.files?.[0];
   if (!file) return;
+  syncApplicationDraft();
   const validTypes = [
     'application/pdf',
     'application/msword',
@@ -2786,16 +2768,13 @@ function selectApplicationDocument(input, requirementId) {
   renderApplicationWizard();
 }
 
-async function persistApplicationDraft(currentStep = applicationWizardStep) {
+async function persistApplicationDraft() {
   syncApplicationDraft();
   const { data: applicationId, error } = await supabase.rpc('student_save_application_draft', {
     payload: {
       callId: applicationDraft.callId,
-      studentCode: applicationDraft.studentCode,
-      faculty: applicationDraft.faculty,
-      academicProgram: applicationDraft.academicProgram,
-      motivation: applicationDraft.motivation,
-      currentStep,
+      facultyCode: applicationDraft.facultyCode,
+      schoolCode: applicationDraft.schoolCode,
     },
   });
   if (error) {
@@ -2833,14 +2812,13 @@ async function persistApplicationDraft(currentStep = applicationWizardStep) {
   const saved = state.applications.find((item) => item.id === applicationId);
   if (saved) {
     applicationDraft.id = saved.id;
-    applicationDraft.currentStep = saved.currentStep;
     applicationDraft.documents = structuredClone(saved.documents);
   }
   return true;
 }
 
 async function saveApplicationDraftAndExit() {
-  const saved = await persistApplicationDraft(applicationWizardStep);
+  const saved = await persistApplicationDraft();
   if (!saved) return;
   closeModal();
   render();
@@ -2849,7 +2827,9 @@ async function saveApplicationDraftAndExit() {
 
 async function submitStudentApplication() {
   syncApplicationDraft();
-  const saved = await persistApplicationDraft(4);
+  if (!applicationDraft.facultyCode || !applicationDraft.schoolCode)
+    return toast('Selecciona tu facultad y escuela profesional.');
+  const saved = await persistApplicationDraft();
   if (!saved) return;
   const { error } = await supabase.rpc('student_submit_application', {
     target_application_id: applicationDraft.id,
@@ -2996,7 +2976,8 @@ Object.assign(window, {
   createNomination,
   startApplication,
   openExistingApplication,
-  goApplicationWizardStep,
+  changeApplicationFaculty,
+  changeApplicationSchool,
   selectApplicationDocument,
   saveApplicationDraftAndExit,
   submitStudentApplication,
