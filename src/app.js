@@ -11,6 +11,13 @@ document.documentElement.style.setProperty('--sigma-shield-image', `url("${unsaa
 document.documentElement.style.setProperty('--sigma-login-image', `url("${loginBackgroundUrl}")`);
 document.documentElement.style.setProperty('--sigma-panels-image', `url("${unsaacCampusUrl}")`);
 
+// Adelanta la descarga de los recursos animados mientras se restaura la sesión.
+[loginBackgroundUrl, sigmaAirplaneUrl].forEach((url) => {
+  const image = new Image();
+  image.fetchPriority = 'high';
+  image.src = url;
+});
+
 // Cliente público: Supabase RLS limita cada operación según la sesión activa.
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -52,7 +59,7 @@ let applicationDraft = null;
 let academicCatalog = [];
 const pendingApplicationFiles = new Map();
 let loginAnimation = null;
-let particleLibraryReady = null;
+const particleLibraryReady = loadSlim(tsParticles);
 
 // Permite usar plantillas HTML formateadas sin alterar sus interpolaciones.
 const html = (strings, ...values) => String.raw({ raw: strings }, ...values);
@@ -317,7 +324,6 @@ async function startLoginAnimation() {
   const scene = document.querySelector('#sigma-travel-scene');
   if (!scene || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
-  particleLibraryReady ??= loadSlim(tsParticles);
   await particleLibraryReady;
 
   // El DOM puede haber cambiado mientras se cargaba la librería.
