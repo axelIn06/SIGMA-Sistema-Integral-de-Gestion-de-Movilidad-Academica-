@@ -88,6 +88,10 @@ Esta migración no cambia los datos funcionales; reduce la superficie de acceso 
 
 Replica de forma incremental los permisos internos y los índices de claves foráneas incorporados durante la limpieza. Es necesaria porque la versión anterior ya estaba registrada en Supabase Cloud: una migración aplicada no se edita para intentar ejecutarla nuevamente, sino que se añade otra versión reproducible e idempotente.
 
+## 20260902165719_remove_call_description.sql
+
+Retira el campo general `description` de `calls` y actualiza `admin_upsert_call` para que deje de exigirlo. Aunque una instalación nueva podría incorporar este cambio directamente en la migración de convocatorias, esta migración debe conservarse porque ya está registrada tanto en Supabase Cloud como en el historial local. Eliminarla desalinearía ambos historiales.
+
 ## 20260902175127_simplify_student_applications.sql
 
 Simplifica la postulación SGMS y añade el catálogo académico institucional:
@@ -97,6 +101,14 @@ Simplifica la postulación SGMS y añade el catálogo académico institucional:
 - Elimina `motivation` y `current_step`, porque el expediente se completa en una sola pantalla documental.
 - Obtiene `student_code` del prefijo del correo autenticado; el navegador no puede elegirlo ni alterarlo.
 - Valida en PostgreSQL que la escuela seleccionada pertenezca a la facultad indicada.
+
+## Por qué no se eliminan migraciones ya aplicadas
+
+El historial local y el remoto contienen actualmente las siete versiones de este documento. Cada archivo representa un cambio que Supabase ya registró como ejecutado. Borrar o reescribir uno de ellos no deshace el cambio en PostgreSQL: solamente rompe la correspondencia entre el repositorio, la base local y la base remota.
+
+Las migraciones `harden_function_execute_privileges` y `sync_security_and_fk_indexes` se parecen porque la segunda asegura en Cloud cambios que fueron añadidos después de registrar la primera. La sincronización usa instrucciones idempotentes y debe permanecer para que una instalación existente y una instalación nueva terminen con los mismos permisos e índices.
+
+Solo convendría compactarlas si se decide crear un proyecto Supabase completamente nuevo, borrar su historial y reconstruir la base desde cero. Mientras SIGMA conserve datos o usuarios reales, mantener el historial incremental es la opción segura y reproducible.
 
 ## Cómo leer el SQL
 

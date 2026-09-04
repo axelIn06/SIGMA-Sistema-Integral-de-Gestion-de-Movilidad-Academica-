@@ -27,7 +27,9 @@
   },
   "homepage": "https://github.com/axelIn06/SIGMA-Sistema-Integral-de-Gestion-de-Movilidad-Academica-#readme",
   "dependencies": {
-    "@supabase/supabase-js": "^2.112.2"
+    "@supabase/supabase-js": "^2.112.2",
+    "@tsparticles/engine": "4.4.0",
+    "@tsparticles/slim": "4.4.0"
   },
   "devDependencies": {
     "prettier": "^3.9.6",

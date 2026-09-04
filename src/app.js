@@ -1,11 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
+import { tsParticles } from '@tsparticles/engine';
+import { loadSlim } from '@tsparticles/slim';
 import unsaacShieldUrl from './assets/unsaac-escudo.png';
-import unsaacMonumentUrl from './assets/unsaac-monumento-tricentenario.webp';
+import loginBackgroundUrl from './assets/fondo-inicio-sesion.jpg';
 import unsaacCampusUrl from './assets/unsaac-ciudad-universitaria.webp';
+import sigmaAirplaneUrl from './assets/sigma-airplane.svg';
 
 // Recursos institucionales locales: Vite transforma estas rutas al generar la aplicación.
 document.documentElement.style.setProperty('--sigma-shield-image', `url("${unsaacShieldUrl}")`);
-document.documentElement.style.setProperty('--sigma-login-image', `url("${unsaacMonumentUrl}")`);
+document.documentElement.style.setProperty('--sigma-login-image', `url("${loginBackgroundUrl}")`);
 document.documentElement.style.setProperty('--sigma-panels-image', `url("${unsaacCampusUrl}")`);
 
 // Cliente público: Supabase RLS limita cada operación según la sesión activa.
@@ -48,6 +51,8 @@ let pendingProfilePhotoPreview = '';
 let applicationDraft = null;
 let academicCatalog = [];
 const pendingApplicationFiles = new Map();
+let loginAnimation = null;
+let particleLibraryReady = null;
 
 // Permite usar plantillas HTML formateadas sin alterar sus interpolaciones.
 const html = (strings, ...values) => String.raw({ raw: strings }, ...values);
@@ -281,87 +286,291 @@ function badge(status) {
   return html`<span class="badge ${cls}">${esc(s)}</span>`;
 }
 
+function stopLoginAnimation() {
+  loginAnimation?.destroy();
+  loginAnimation = null;
+}
+
+function distributeLoginAirplanes(container, compactScreen) {
+  const columns = compactScreen ? 4 : 7;
+  const rows = compactScreen ? 4 : 5;
+  const { width, height } = container.canvas.size;
+  const cellWidth = width / columns;
+  const cellHeight = height / rows;
+
+  container.particles.clear();
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const horizontalOffset = (((row + column) % 3) - 1) * cellWidth * 0.16;
+      const verticalOffset = (((row * 2 + column) % 3) - 1) * cellHeight * 0.12;
+
+      container.particles.addParticle({
+        x: (column + 0.5) * cellWidth + horizontalOffset,
+        y: (row + 0.5) * cellHeight + verticalOffset,
+      });
+    }
+  }
+}
+
+async function startLoginAnimation() {
+  const scene = document.querySelector('#sigma-travel-scene');
+  if (!scene || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  particleLibraryReady ??= loadSlim(tsParticles);
+  await particleLibraryReady;
+
+  // El DOM puede haber cambiado mientras se cargaba la librería.
+  if (!document.body.contains(scene)) return;
+
+  const compactScreen = window.matchMedia('(max-width: 760px)').matches;
+  loginAnimation = await tsParticles.load({
+    id: 'sigma-travel-scene',
+    options: {
+      fullScreen: { enable: false },
+      fpsLimit: 45,
+      detectRetina: true,
+      interactivity: {
+        detectsOn: 'canvas',
+        events: {
+          onClick: { enable: false, mode: 'repulse' },
+          onHover: { enable: true, mode: 'grab' },
+          resize: { enable: true },
+        },
+        modes: {
+          grab: {
+            distance: compactScreen ? 95 : 175,
+            links: {
+              color: '#ead8b4',
+              opacity: compactScreen ? 0.16 : 0.24,
+            },
+          },
+        },
+      },
+      particles: {
+        number: {
+          value: compactScreen ? 16 : 35,
+          density: { enable: false },
+        },
+        color: { value: ['#c9bca9', '#ead8b4', '#95877e'] },
+        shape: {
+          type: 'image',
+          options: {
+            image: {
+              src: sigmaAirplaneUrl,
+              width: 128,
+              height: 64,
+              replaceColor: true,
+            },
+          },
+        },
+        opacity: {
+          value: { min: 0.13, max: 0.3 },
+        },
+        size: {
+          value: compactScreen ? { min: 5, max: 9 } : { min: 7, max: 13 },
+        },
+        links: {
+          enable: false,
+          color: '#ead8b4',
+          opacity: 0.2,
+          width: 1,
+        },
+        rotate: {
+          value: { min: -8, max: 8 },
+          direction: 'random',
+          animation: { enable: false },
+        },
+        move: {
+          enable: true,
+          direction: 'left',
+          speed: { min: 0.45, max: 1.1 },
+          straight: false,
+          random: true,
+          outModes: { default: 'out' },
+        },
+      },
+    },
+  });
+
+  distributeLoginAirplanes(loginAnimation, compactScreen);
+}
+
 // -----------------------------------------------------------------------------
 // Autenticación, registro y sesión (Supabase Auth)
 // -----------------------------------------------------------------------------
-function login() {
-  session = null;
-  $('#app').innerHTML = html`<main class="login-shell">
-    <section class="login-brand">
-      <div class="brand">
-        <div class="seal">S</div>
-        <div>
-          <div class="brand-name">SIGMA OCRI</div>
-          <div class="brand-sub">UNIVERSIDAD NACIONAL DE SAN ANTONIO ABAD DEL CUSCO</div>
-        </div>
-      </div>
-      <div class="hero">
-        <div class="eyebrow">Movilidad académica</div>
-        <h1>Conectamos talento<br />con el <span>mundo.</span></h1>
-        <p>
-          Una plataforma integral para gestionar postulaciones, documentos, evaluaciones y
-          experiencias de movilidad académica.
-        </p>
-      </div>
-      <div class="module-pills">
-        <span>SGMS · Movilidad saliente</span><span>SGME · Movilidad entrante</span
-        ><span>OCRI · Gestión institucional</span>
-      </div>
-    </section>
-    <section class="login-panel">
-      <div class="login-box">
-        <div class="eyebrow">Bienvenido</div>
-        <h2>Acceder a SIGMA</h2>
-        <p>Ingresa con el correo y la contraseña que configuraste al verificar tu cuenta.</p>
-        ${
-          supabase
-            ? html`<form class="role-grid" onsubmit="signIn(event)">
-                  <div class="field">
-                    <label>Correo</label
-                    ><input
-                      class="input"
-                      name="email"
-                      type="email"
-                      autocomplete="email"
-                      placeholder="codigo@unsaac.edu.pe"
-                      required
-                    />
-                  </div>
-                  <div class="field">
-                    <label>Contraseña</label
-                    ><input
-                      class="input"
-                      name="password"
-                      type="password"
-                      autocomplete="current-password"
-                      placeholder="Tu contraseña"
-                      required
-                    />
-                  </div>
-                  <button class="btn btn-primary" type="submit">Iniciar sesión</button
-                  ><button class="btn btn-soft" type="button" onclick="requestPasswordReset()">
-                    Olvidé mi contraseña
-                  </button>
-                </form>
-                <button
-                  class="btn btn-gold"
-                  style="width:100%;margin-top:4px"
-                  onclick="showRegister()"
-                >
-                  Crear mi cuenta
-                </button>
-                <p class="login-note">
-                  La verificación por enlace se usa solo al crear una cuenta o recuperar la
-                  contraseña.
-                </p>`
-            : html`<p class="login-note">
-                Falta la configuración local de Supabase. Copie <code>.env.example</code> a
-                <code>.env.local</code> antes de iniciar la aplicación.
-              </p>`
-        }
-      </div>
-    </section>
+// El acceso usa dos momentos: una portada institucional mínima y, después,
+// el formulario elegido por la persona sin repetir la identidad superior.
+function authShell({
+  cardEyebrow = '',
+  cardTitle = '',
+  cardSub = '',
+  body,
+  foot = '',
+  showIdentity = true,
+  bareBody = false,
+}) {
+  return html`<main class="sgmee-shell login-entry">
+    <div id="sigma-travel-scene" class="login-travel-scene" aria-hidden="true"></div>
+    <svg class="login-routes" viewBox="0 0 1440 900" preserveAspectRatio="none" aria-hidden="true">
+      <path d="M-100 700 C 210 480, 430 735, 750 490 S 1190 270, 1520 390" />
+      <path d="M-50 245 C 275 80, 520 315, 770 205 S 1170 40, 1490 190" />
+      <path d="M185 930 C 400 710, 650 790, 910 590 S 1250 515, 1490 640" />
+      <path d="M-80 455 C 245 350, 425 390, 655 315 S 1120 420, 1510 295" />
+      <path d="M40 825 C 255 650, 520 590, 740 690 S 1150 840, 1465 735" />
+      <path d="M320 -40 C 390 190, 590 270, 810 350 S 1140 530, 1430 535" />
+      <circle cx="365" cy="570" r="5" />
+      <circle cx="760" cy="475" r="5" />
+      <circle cx="1190" cy="315" r="5" />
+      <circle cx="655" cy="315" r="4" />
+      <circle cx="910" cy="590" r="4" />
+      <circle cx="1260" cy="735" r="4" />
+    </svg>
+    <div class="sgmee-center ${showIdentity ? '' : 'sgmee-form-only'}">
+      ${
+        showIdentity
+          ? html`<div class="sgmee-identity">
+              <p class="sgmee-office">Oficina de Cooperación y Relaciones Internacionales</p>
+              <img class="sgmee-shield" src="${unsaacShieldUrl}" alt="Escudo de la UNSAAC" />
+              <h1 class="sgmee-title">SIGMA</h1>
+              <p class="sgmee-sub">Sistema Integral de Gestión de Movilidad Académica · UNSAAC</p>
+            </div>`
+          : ''
+      }
+      ${
+        bareBody
+          ? body
+          : html`<section class="sgmee-card" aria-label="${esc(cardTitle)}">
+              <p class="sgmee-card-eyebrow">${cardEyebrow}</p>
+              <h2>${cardTitle}</h2>
+              <p class="sgmee-card-sub">${cardSub}</p>
+              ${body}
+            </section>`
+      }
+      ${foot}
+    </div>
   </main>`;
+}
+
+function login() {
+  stopLoginAnimation();
+  session = null;
+  $('#app').innerHTML = authShell({
+    bareBody: true,
+    body: html`<div class="sgmee-choice-card" aria-label="Opciones de acceso">
+      <button class="sgmee-choice-primary" type="button" onclick="showLoginForm()">
+        Iniciar sesión
+      </button>
+      <button class="sgmee-choice-secondary" type="button" onclick="showRegister()">
+        Crear cuenta
+      </button>
+    </div>`,
+  });
+  void startLoginAnimation();
+}
+
+function showLoginForm() {
+  stopLoginAnimation();
+  const body = supabase
+    ? html`<form class="sgmee-form" onsubmit="signIn(event)">
+          <div class="field">
+            <label for="sgmee-email">Correo electrónico</label>
+            <input
+              class="input sgmee-input"
+              id="sgmee-email"
+              name="email"
+              type="email"
+              autocomplete="email"
+              placeholder="codigo@unsaac.edu.pe"
+              required
+            />
+          </div>
+          <div class="field">
+            <label for="sgmee-password">Contraseña</label>
+            <div class="sgmee-password-wrap">
+              <input
+                class="input sgmee-input"
+                id="sgmee-password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                placeholder="Tu contraseña"
+                required
+              />
+              <button
+                type="button"
+                class="sgmee-eye"
+                onclick="togglePassword('sgmee-password', this)"
+                aria-label="Mostrar u ocultar contraseña"
+              >
+                ◌
+              </button>
+            </div>
+          </div>
+          <button class="btn sgmee-primary" type="submit">Iniciar sesión</button>
+        </form>
+        <div class="sgmee-links">
+          <button type="button" class="sgmee-link" onclick="showRegister()">Crear cuenta</button>
+          <span class="sgmee-dot" aria-hidden="true">·</span>
+          <button type="button" class="sgmee-link" onclick="showRecover()">
+            Recuperar contraseña
+          </button>
+        </div>
+        <button type="button" class="sgmee-back" onclick="login()">← Volver</button>`
+    : html`<p class="sgmee-note">
+        Falta la configuración local de Supabase. Copie <code>.env.example</code> a
+        <code>.env.local</code> antes de iniciar la aplicación.
+      </p>`;
+  $('#app').innerHTML = authShell({
+    cardEyebrow: 'Bienvenido',
+    cardTitle: 'Iniciar sesión',
+    cardSub: 'Ingresa con el correo y la contraseña de tu cuenta verificada.',
+    body,
+    showIdentity: false,
+  });
+  void startLoginAnimation();
+}
+
+function togglePassword(inputId, button) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const visible = input.type === 'text';
+  input.type = visible ? 'password' : 'text';
+  if (button) button.textContent = visible ? '◌' : '●';
+  input.focus();
+}
+
+function showRecover() {
+  stopLoginAnimation();
+  $('#app').innerHTML = authShell({
+    cardEyebrow: 'Recuperar acceso',
+    cardTitle: 'Recuperar contraseña',
+    cardSub: 'Te enviaremos un enlace para definir una nueva contraseña.',
+    body: html`<form class="sgmee-form" onsubmit="requestPasswordReset(event)">
+        <div class="field">
+          <label for="sgmee-recover-email">Correo electrónico</label>
+          <input
+            class="input sgmee-input"
+            id="sgmee-recover-email"
+            name="email"
+            type="email"
+            autocomplete="email"
+            placeholder="codigo@unsaac.edu.pe"
+            required
+          />
+        </div>
+        <button class="btn sgmee-primary" type="submit">Enviar enlace</button>
+      </form>
+      <div class="sgmee-links">
+        <button type="button" class="sgmee-link" onclick="showLoginForm()">
+          ← Volver a iniciar sesión
+        </button>
+        <span class="sgmee-dot" aria-hidden="true">·</span>
+        <button type="button" class="sgmee-link" onclick="showRegister()">Crear cuenta</button>
+      </div>`,
+    showIdentity: false,
+  });
+  void startLoginAnimation();
 }
 // Acceso ordinario: solo correo y contraseña; el enlace se reserva para verificar o recuperar.
 async function signIn(event) {
@@ -373,38 +582,65 @@ async function signIn(event) {
   });
   if (error) toast('Correo o contraseña incorrectos.');
 }
-async function requestPasswordReset() {
-  const email = document.querySelector('[name="email"]')?.value?.trim();
+async function requestPasswordReset(event) {
+  event?.preventDefault?.();
+  const form = event?.target?.closest
+    ? event.target.closest('form')
+    : document.querySelector('.sgmee-form');
+  const email = form
+    ? new FormData(form).get('email')?.toString().trim()
+    : document.querySelector('[name="email"]')?.value?.trim();
   if (!email) return toast('Ingrese primero su correo.');
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: window.location.origin,
   });
-  toast(error ? error.message : 'Enlace de recuperación enviado. Revise su correo de pruebas.');
+  toast(error ? error.message : 'Enlace de recuperación enviado. Revise su correo.');
+  if (!error) login();
 }
 function showRegister() {
-  modal(
-    html`<div class="modal-head">
-        <h2>Crear mi cuenta</h2>
-        <button class="modal-close" onclick="closeModal()">×</button>
-      </div>
-      <p class="muted">
-        Verificaremos que el correo le pertenece. Después del enlace podrá crear su contraseña
-        personal.
-      </p>
-      <form class="form-grid" onsubmit="register(event)">
-        <div class="field wide">
-          <label>Nombre completo</label><input class="input" name="fullName" required />
+  stopLoginAnimation();
+  $('#app').innerHTML = authShell({
+    cardEyebrow: 'Registro',
+    cardTitle: 'Crear cuenta',
+    cardSub: 'Verificaremos que el correo le pertenece. Después podrá crear su contraseña.',
+    body: html`<form class="sgmee-form" onsubmit="register(event)">
+        <div class="field">
+          <label for="sgmee-name">Nombre completo</label>
+          <input
+            class="input sgmee-input"
+            id="sgmee-name"
+            name="fullName"
+            autocomplete="name"
+            placeholder="Nombres y apellidos"
+            required
+          />
         </div>
-        <div class="field wide">
-          <label>Correo institucional o universitario</label
-          ><input class="input" name="email" type="email" required />
+        <div class="field">
+          <label for="sgmee-new-email">Correo institucional o universitario</label>
+          <input
+            class="input sgmee-input"
+            id="sgmee-new-email"
+            name="email"
+            type="email"
+            autocomplete="email"
+            placeholder="codigo@unsaac.edu.pe"
+            required
+          />
         </div>
-        <div class="modal-actions wide">
-          <button type="button" class="btn btn-soft" onclick="closeModal()">Cancelar</button
-          ><button class="btn btn-primary">Enviar verificación</button>
-        </div>
-      </form>`,
-  );
+        <button class="btn sgmee-primary" type="submit">Enviar verificación</button>
+      </form>
+      <div class="sgmee-links">
+        <button type="button" class="sgmee-link" onclick="showLoginForm()">
+          ← Volver a iniciar sesión
+        </button>
+        <span class="sgmee-dot" aria-hidden="true">·</span>
+        <button type="button" class="sgmee-link" onclick="showRecover()">
+          Recuperar contraseña
+        </button>
+      </div>`,
+    showIdentity: false,
+  });
+  void startLoginAnimation();
 }
 async function register(event) {
   event.preventDefault();
@@ -427,61 +663,57 @@ async function register(event) {
     },
   });
   if (error) return toast(error.message);
-  closeModal();
-  toast('Enlace de verificación enviado. Revise el correo de pruebas.');
+  login();
+  toast('Enlace de verificación enviado. Revise su correo.');
 }
 function passwordSetup() {
+  stopLoginAnimation();
   const recovery = passwordRecoveryMode;
-  $('#app').innerHTML = html`<main class="login-shell">
-    <section class="login-brand">
-      <div class="brand">
-        <div class="seal">S</div>
-        <div>
-          <div class="brand-name">SIGMA OCRI</div>
-          <div class="brand-sub">UNSAAC</div>
+  $('#app').innerHTML = authShell({
+    cardEyebrow: recovery ? 'Recuperación' : 'Último paso',
+    cardTitle: recovery ? 'Nueva contraseña' : 'Crea tu contraseña',
+    cardSub: 'Tu correo ya fue verificado. Usa esta contraseña junto con tu correo.',
+    body: html`<form class="sgmee-form" onsubmit="setPassword(event)">
+      <div class="field">
+        <label for="sgmee-new-pass">Nueva contraseña</label>
+        <div class="sgmee-password-wrap">
+          <input
+            class="input sgmee-input"
+            id="sgmee-new-pass"
+            name="password"
+            type="password"
+            autocomplete="new-password"
+            minlength="8"
+            placeholder="Mínimo 8 caracteres"
+            required
+          />
+          <button
+            type="button"
+            class="sgmee-eye"
+            onclick="togglePassword('sgmee-new-pass', this)"
+            aria-label="Mostrar u ocultar contraseña"
+          >
+            ◌
+          </button>
         </div>
       </div>
-      <div class="hero">
-        <div class="eyebrow">Cuenta verificada</div>
-        <h1>Protege tu<br /><span>acceso.</span></h1>
-        <p>
-          Tu correo ya fue verificado. Define una contraseña personal para los próximos ingresos.
-        </p>
+      <div class="field">
+        <label for="sgmee-confirm-pass">Confirmar contraseña</label>
+        <input
+          class="input sgmee-input"
+          id="sgmee-confirm-pass"
+          name="confirmation"
+          type="password"
+          autocomplete="new-password"
+          minlength="8"
+          placeholder="Repite tu contraseña"
+          required
+        />
       </div>
-    </section>
-    <section class="login-panel">
-      <div class="login-box">
-        <div class="eyebrow">${recovery ? 'Recuperación' : 'Último paso'}</div>
-        <h2>${recovery ? 'Nueva contraseña' : 'Crea tu contraseña'}</h2>
-        <p>Usarás esta contraseña junto con tu correo en los siguientes accesos.</p>
-        <form class="role-grid" onsubmit="setPassword(event)">
-          <div class="field">
-            <label>Nueva contraseña</label
-            ><input
-              class="input"
-              name="password"
-              type="password"
-              autocomplete="new-password"
-              minlength="8"
-              required
-            />
-          </div>
-          <div class="field">
-            <label>Confirmar contraseña</label
-            ><input
-              class="input"
-              name="confirmation"
-              type="password"
-              autocomplete="new-password"
-              minlength="8"
-              required
-            />
-          </div>
-          <button class="btn btn-primary" type="submit">Guardar contraseña</button>
-        </form>
-      </div>
-    </section>
-  </main>`;
+      <button class="btn sgmee-primary" type="submit">Guardar contraseña</button>
+    </form>`,
+    showIdentity: false,
+  });
 }
 async function setPassword(event) {
   event.preventDefault();
@@ -621,6 +853,7 @@ function portalMeta() {
 // Estructura del portal y vistas por rol
 // -----------------------------------------------------------------------------
 function render() {
+  stopLoginAnimation();
   if (!session) return login();
   if (session.role === 'pending') return accessPending();
   const portal = portalMeta();
@@ -677,42 +910,15 @@ function render() {
   views[route]?.();
 }
 function accessPending() {
-  $('#app').innerHTML = html`<main class="login-shell">
-    <section class="login-brand">
-      <div class="brand">
-        <div class="seal">S</div>
-        <div>
-          <div class="brand-name">SIGMA OCRI</div>
-          <div class="brand-sub">UNSAAC</div>
-        </div>
-      </div>
-      <div class="hero">
-        <div class="eyebrow">Solicitud recibida</div>
-        <h1>Tu cuenta está<br /><span>pendiente.</span></h1>
-        <p>
-          OCRI validará tu identidad institucional o universidad de origen antes de asignarte un
-          rol.
-        </p>
-      </div>
-    </section>
-    <section class="login-panel">
-      <div class="login-box">
-        <div class="eyebrow">Acceso restringido</div>
-        <h2>Cuenta registrada</h2>
-        <p>
-          Se creó correctamente el perfil para <strong>${esc(session.email)}</strong>. Aún no tiene
-          un rol habilitado, por lo que no puede acceder a los módulos.
-        </p>
-        <div class="card">
-          <div class="stat-label">Estado de la cuenta</div>
-          <div style="margin-top:12px">${badge(session.status)}</div>
-        </div>
-        <button class="btn btn-soft" style="margin-top:20px" onclick="signOut()">
-          Cerrar sesión
-        </button>
-      </div>
-    </section>
-  </main>`;
+  stopLoginAnimation();
+  $('#app').innerHTML = authShell({
+    cardEyebrow: 'Acceso restringido',
+    cardTitle: 'Cuenta pendiente',
+    cardSub: `Se creó el perfil para <strong>${esc(session.email)}</strong>. OCRI validará tu identidad antes de asignarte un rol.`,
+    body: html`<div class="sgmee-status">${badge(session.status)}</div>
+      <button class="btn sgmee-primary" type="button" onclick="signOut()">Cerrar sesión</button>`,
+    showIdentity: false,
+  });
 }
 function go(r) {
   route = r;
@@ -2939,9 +3145,13 @@ async function boot() {
 }
 Object.assign(window, {
   $,
+  login,
+  showLoginForm,
   signIn,
   requestPasswordReset,
   showRegister,
+  showRecover,
+  togglePassword,
   register,
   setPassword,
   signOut,
