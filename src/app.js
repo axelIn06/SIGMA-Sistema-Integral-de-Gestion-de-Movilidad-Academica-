@@ -46,6 +46,31 @@ const ROLE_VIEWS = {
   GESTOR_EXTERNO: 'external_manager',
   ESTUDIANTE_EXTERNO: 'external',
 };
+const STATUS_LABELS = {
+  ENVIADA: 'Postulado',
+  OBSERVADA: 'Subsanación pendiente',
+  APROBADA_OCRI: 'Aprobado por OCRI',
+  FINALIZADA: 'Concluido',
+  BORRADOR: 'Borrador',
+  POSTULADO: 'Postulado',
+  EN_REVISION_DOCUMENTAL: 'En revisión OCRI',
+  EN_REVISION_OCRI: 'En revisión OCRI',
+  OBSERVADO: 'Subsanación pendiente',
+  APROBADO_OCRI: 'Aprobado por OCRI',
+  NOMINADO: 'Nominado',
+  NOMINADO_UNSAAC: 'Nominado por UNSAAC',
+  EN_EVALUACION_DESTINO: 'En evaluación por destino',
+  VALIDADO_ORIGEN: 'Validado por universidad de origen',
+  ACEPTADO: 'Aceptado',
+  NO_ADMITIDO_UNSAAC: 'No admitido por UNSAAC',
+  NO_ADMITIDO: 'No admitido',
+  NO_ACEPTADO_DESTINO: 'No aceptado por universidad destino',
+  EN_MOVILIDAD: 'En movilidad',
+  CONCLUIDO: 'Concluido',
+  FINALIZADO: 'Concluido',
+  CANCELADO: 'Cancelado',
+  INVITACION_ENVIADA: 'Invitación enviada',
+};
 let state = load();
 let session = null;
 let route = 'dashboard';
@@ -56,6 +81,7 @@ let callWizardStep = 1;
 let editingCallId = null;
 let pendingProfilePhotoPreview = '';
 let applicationDraft = null;
+let selectedStudentApplicationId = null;
 let academicCatalog = [];
 const pendingApplicationFiles = new Map();
 let loginAnimation = null;
@@ -189,6 +215,7 @@ async function loadApplicationsFromDatabase() {
     return;
   }
 
+  const { data: letters } = await supabase.from('acceptance_letters').select('*');
   state.applications = data.map((application) => {
     const documents = application.application_documents || [];
     const completedDocuments = documents.filter((document) => document.storage_path).length;
@@ -203,7 +230,8 @@ async function loadApplicationsFromDatabase() {
 
     return {
       id: application.id,
-      displayId: `SGMS-${application.id.slice(0, 6).toUpperCase()}`,
+      letter: letters?.find((l) => l.application_id === application.id) || null,
+      displayId: `${application.calls?.direction === 'ENTRANTE' ? 'SGME' : 'SGMS'}-${application.id.slice(0, 6).toUpperCase()}`,
       callId: application.call_id,
       applicantId: application.applicant_id,
       direction: application.calls?.direction || 'SALIENTE',
@@ -280,7 +308,7 @@ function toast(msg) {
   setTimeout(() => e.classList.remove('show'), 2300);
 }
 function badge(status) {
-  const s = status.replaceAll('_', ' ');
+  const s = STATUS_LABELS[status] || status.replaceAll('_', ' ');
   const cls = /APROBAD|ACTIVA|COMPLETO|CONFIRMADO/.test(status)
     ? 'ok'
     : /OBSERVAD|RECHAZAD/.test(status)
@@ -811,22 +839,17 @@ function portalMeta() {
       menu: [
         ['dashboard', 'Inicio'],
         ['calls', 'Convocatorias'],
-        ['sgms', 'Mi postulación'],
-        ['profile', 'Mi perfil'],
-        ['documents', 'Documentos'],
-        ['tracking', 'Seguimiento'],
+        ['sgms', 'Mis postulaciones'],
       ],
     };
   if (session.role === 'external')
     return {
       module: 'MOVILIDAD ENTRANTE · SGME',
-      section: 'MI EXPERIENCIA UNSAAC',
+      section: 'MI MOVILIDAD',
       menu: [
         ['dashboard', 'Inicio'],
-        ['sgme', 'Mi nominación'],
-        ['profile', 'Perfil y estudios'],
-        ['documents', 'Documentos'],
-        ['tracking', 'Seguimiento'],
+        ['calls', 'Convocatorias'],
+        ['sgme', 'Mis postulaciones'],
       ],
     };
   if (session.role === 'external_manager')
@@ -834,23 +857,23 @@ function portalMeta() {
       module: 'SGME · GESTOR EXTERNO',
       section: (session.university || 'Universidad asociada').toUpperCase(),
       menu: [
-        ['dashboard', 'Nominaciones'],
-        ['nominations', 'Nueva nominación'],
-        ['documents', 'Guía de documentos'],
-        ['profile', 'Perfil institucional'],
+        ['dashboard', 'Resumen'],
+        ['calls', 'Convocatorias'],
+        ['nominations', 'Nominaciones'],
+        ['manager_students', 'Estudiantes'],
+        ['manager_results', 'Resultados'],
       ],
     };
   return {
     module: 'OFICINA DE COOPERACIÓN Y RELACIONES INTERNACIONALES',
     section: 'PANEL OCRI',
     menu: [
-      ['dashboard', 'Resumen institucional'],
+      ['dashboard', 'Panel general'],
       ['calls', 'Convocatorias'],
-      ['sgms', 'SGMS · Salidas UNSAAC'],
-      ['sgme', 'SGME · Ingresos a UNSAAC'],
-      ['nominations', 'SGME · Nominaciones recibidas'],
-      ['access', 'Accesos y universidades'],
-      ['profile', 'Mi perfil'],
+      ['applications', 'Expedientes'],
+      ['nominations', 'Nominaciones entrantes'],
+      ['access', 'Universidades y usuarios'],
+      ['reports', 'Reportes'],
     ],
   };
 }
@@ -862,7 +885,10 @@ function render() {
   stopLoginAnimation();
   if (!session) return login();
   if (session.role === 'pending') return accessPending();
+  if (session.role === 'student' && ['documents', 'tracking'].includes(route)) route = 'sgms';
+  if (session.role === 'external' && ['documents', 'tracking'].includes(route)) route = 'sgme';
   const portal = portalMeta();
+  if (![...portal.menu.map(([target]) => target), 'profile'].includes(route)) route = 'dashboard';
   const navigation = portal.menu
     .map(
       ([target, label]) =>
@@ -871,7 +897,9 @@ function render() {
         </button>`,
     )
     .join('');
-  const context = session.role === 'admin' ? '2026-II · Vista administrativa' : esc(session.name);
+  if (['student', 'external'].includes(session.role))
+    return renderMobilityStudentPortal(portal, navigation);
+  const context = session.role === 'admin' ? 'Gestión institucional · OCRI' : esc(session.name);
   $('#app').innerHTML = html`<div class="portal-shell">
     <header class="portal-header">
       <div class="portal-header-start">
@@ -915,6 +943,47 @@ function render() {
   </div>`;
   views[route]?.();
 }
+function renderMobilityStudentPortal(portal, navigation) {
+  const photo = session.photoUrl
+    ? html`<img src="${esc(session.photoUrl)}" alt="" />`
+    : esc(session.initials);
+  $('#app').innerHTML = html`<div class="portal-shell student-portal">
+    <header class="portal-header student-header">
+      <div class="portal-header-start">
+        <strong class="portal-wordmark">SIGMA</strong>
+        <span class="portal-module">${portal.module}</span>
+      </div>
+      <nav class="student-desktop-nav" aria-label="Navegación principal">${navigation}</nav>
+      <div class="student-account">
+        <button
+          class="student-account-trigger"
+          type="button"
+          onclick="toggleStudentAccountMenu()"
+          aria-label="Abrir opciones de cuenta"
+        >
+          <span class="sidebar-avatar">${photo}</span>
+          <span class="student-account-copy">
+            <strong>${esc(session.name)}</strong>
+            <small
+              >${session.role === 'student' ? 'Estudiante UNSAAC' : 'Estudiante externo'}</small
+            >
+          </span>
+          <span aria-hidden="true">⌄</span>
+        </button>
+        <div class="student-account-menu hidden" id="studentAccountMenu">
+          <button type="button" onclick="go('profile')">Mi perfil</button>
+          <button type="button" onclick="signOut()">Cerrar sesión</button>
+        </div>
+      </div>
+    </header>
+    <main class="main student-main"><section class="content" id="view"></section></main>
+    <nav class="student-mobile-nav" aria-label="Navegación móvil">${navigation}</nav>
+  </div>`;
+  views[route]?.();
+}
+function toggleStudentAccountMenu() {
+  $('#studentAccountMenu')?.classList.toggle('hidden');
+}
 function accessPending() {
   stopLoginAnimation();
   $('#app').innerHTML = authShell({
@@ -927,6 +996,11 @@ function accessPending() {
   });
 }
 function go(r) {
+  if (
+    (r === 'sgms' && session?.role === 'student') ||
+    (r === 'sgme' && session?.role === 'external')
+  )
+    selectedStudentApplicationId = null;
   route = r;
   render();
 }
@@ -1063,77 +1137,20 @@ const views = {
     if (session.role === 'student') return studentDashboard();
     if (session.role === 'external') return externalStudentDashboard();
     if (session.role === 'external_manager') return managerDashboard();
-    const outbound = apps.filter((a) => a.direction === 'SALIENTE').length;
-    const inbound = apps.filter((a) => a.direction === 'ENTRANTE').length;
-    const pending = apps.filter((a) => /REVISION|VALIDACION|OBSERVADO/.test(a.status)).length;
-    const published = state.calls.filter((c) => c.status === 'ACTIVA').length;
-    $('#view').innerHTML = html`<div class="dashboard-heading">
-        <div class="eyebrow">Panel OCRI · gestión institucional</div>
-        <h1>Control de movilidad, con cada flujo claramente separado.</h1>
-        <p>
-          <strong>SGMS</strong>: estudiantes UNSAAC que postulan a salir. <strong>SGME</strong>:
-          estudiantes de universidades asociadas que ingresan a la UNSAAC mediante una nominación.
-        </p>
-      </div>
-      <div class="dashboard-stats">
-        <article class="dashboard-stat accent-maroon">
-          <strong>${outbound}</strong
-          ><span
-            >SGMS · postulaciones salientes<small
-              >Estudiantes UNSAAC hacia universidades de destino</small
-            ></span
-          >
-        </article>
-        <article class="dashboard-stat accent-gold">
-          <strong>${inbound}</strong
-          ><span
-            >SGME · nominaciones entrantes<small
-              >Universidades asociadas proponen estudiantes para la UNSAAC</small
-            ></span
-          >
-        </article>
-        <article class="dashboard-stat accent-maroon">
-          <strong>${pending}</strong
-          ><span>Expedientes por revisar<small>Documentos y validaciones SGMS / SGME</small></span>
-        </article>
-        <article class="dashboard-stat accent-gold">
-          <strong>${published}</strong
-          ><span>Convocatorias publicadas<small>Oportunidades activas del periodo</small></span>
-        </article>
-      </div>
-      <div class="dashboard-columns admin-columns">
-        <article class="card activity-card">
-          <h3>Actividad reciente</h3>
-          <div class="activity-item">
-            <strong
-              >SGMS ·
-              ${esc(state.calls.find((c) => c.direction === 'SALIENTE' && c.status === 'ACTIVA')?.title || 'Convocatoria saliente 2026-II')}
-              publicada</strong
-            ><span>Estudiantes UNSAAC pueden revisar requisitos y postular.</span>
-          </div>
-          <div class="activity-item">
-            <strong>SGME · ${state.nominations.length} nominaciones recibidas</strong
-            ><span
-              >Estudiantes propuestos por universidades asociadas para ingresar a la UNSAAC.</span
-            >
-          </div>
-        </article>
-        <aside class="priority-card">
-          <h3>Acciones prioritarias</h3>
-          <button onclick="callModal()">＋ Crear convocatoria</button
-          ><button onclick="go('nominations')">✓ Revisar nominaciones SGME</button
-          ><button onclick="go('access')">⚙ Gestionar accesos y universidades</button>
-        </aside>
-      </div>`;
+    return adminDashboard(apps);
   },
   calls() {
     const canEdit = /admin/.test(session.role);
     const visibleCalls = state.calls.filter((call) => {
       if (session.role === 'student') return call.direction === 'SALIENTE';
       if (session.role === 'external') return call.direction === 'ENTRANTE';
+      if (session.role === 'external_manager') return call.direction === 'ENTRANTE';
       return true;
     });
     const showDirectionFilter = canEdit;
+    const activeApplication = ['student', 'external'].includes(session.role)
+      ? getActiveMobilityApplication()
+      : null;
     $('#view').innerHTML =
       head(
         'Convocatorias',
@@ -1145,6 +1162,32 @@ const views = {
           : '',
       ) +
       html`${
+          activeApplication
+            ? html`<aside class="student-call-notice">
+                <div>
+                  <strong>Ya tienes una postulación activa</strong>
+                  <span>Podrás iniciar otra cuando este proceso finalice o no sea admitido.</span>
+                </div>
+                <button
+                  class="btn btn-soft"
+                  type="button"
+                  onclick="openStudentApplication('${activeApplication.id}')"
+                >
+                  Ver mi postulación activa
+                </button>
+              </aside>`
+            : session.role === 'external'
+              ? html`<aside class="student-call-notice is-inbound">
+                  <div>
+                    <strong>El proceso comienza con una nominación</strong>
+                    <span
+                      >Tu universidad de origen debe nominarte. Después recibirás una invitación
+                      para completar tu expediente en SIGMA.</span
+                    >
+                  </div>
+                </aside>`
+              : ''
+        }${
           showDirectionFilter
             ? html`<div class="filters">
                 <select class="input" onchange="filterCards(this.value)">
@@ -1164,6 +1207,7 @@ const views = {
         </div>`;
   },
   sgms() {
+    if (session.role === 'student') return studentApplicationsView();
     appView(
       'SALIENTE',
       'SGMS · Movilidad saliente',
@@ -1171,11 +1215,30 @@ const views = {
     );
   },
   sgme() {
+    if (session.role === 'external') return studentApplicationsView('ENTRANTE');
     appView(
       'ENTRANTE',
       'SGME · Movilidad entrante',
       'Postulaciones de estudiantes externos hacia la UNSAAC.',
     );
+  },
+  applications() {
+    adminApplicationsView();
+  },
+  academic_review() {
+    academicReviewView();
+  },
+  letters() {
+    lettersView();
+  },
+  audit() {
+    auditView();
+  },
+  manager_students() {
+    managerStudentsView();
+  },
+  manager_results() {
+    managerResultsView();
   },
   nominations() {
     const action = /admin|external_manager/.test(session.role)
@@ -1244,12 +1307,14 @@ const views = {
             <div class="stat-value">${filteredApps('ENTRANTE').length}</div>
           </div>
           <div class="card stat">
-            <div class="stat-label">Universidades</div>
-            <div class="stat-value">5</div>
+            <div class="stat-label">Convocatorias</div>
+            <div class="stat-value">${state.calls.length}</div>
           </div>
           <div class="card stat">
-            <div class="stat-label">Países</div>
-            <div class="stat-value">4</div>
+            <div class="stat-label">Expedientes concluidos</div>
+            <div class="stat-value">
+              ${state.applications.filter((a) => /CONCLUID|FINALIZAD/.test(a.status)).length}
+            </div>
           </div>
         </div>
         <div class="grid-2">
@@ -1258,8 +1323,12 @@ const views = {
             ${Object.entries(faculties)
               .map(
                 ([f, n]) =>
-                  html`<p>${f} <strong style="float:right">${n}</strong></p>
-                    <div class="progress"><span style="width:${n * 30}%"></span></div>`,
+                  html`<p>${esc(f)} <strong style="float:right">${n}</strong></p>
+                    <div class="progress">
+                      <span
+                        style="width:${(100 * n) / Math.max(state.applications.length, 1)}%"
+                      ></span>
+                    </div>`,
               )
               .join('')}
           </div>
@@ -1309,95 +1378,705 @@ function appView(dir, title, desc) {
         ${apps.length ? appTable(apps) : '<div class="empty">No hay postulaciones registradas.</div>'}
       </div>`;
 }
-function studentDashboard() {
-  const application = filteredApps('SALIENTE')[0],
-    call =
-      state.calls.find((c) => c.direction === 'SALIENTE' && c.status === 'ACTIVA') ||
-      state.calls.find((c) => c.direction === 'SALIENTE');
-  const progress = application?.progress || 0;
-  const completed = application?.documents.filter((d) => d.status === 'APROBADO').length || 0;
-  $('#view').innerHTML = html`<div class="dashboard-heading">
-      <h1>Hola, ${esc(session.name.split(' ')[0])}.</h1>
-      <p>Estas son las oportunidades y tareas de tu movilidad saliente.</p>
+function getStudentApplications() {
+  return filteredApps('SALIENTE');
+}
+function getMobilityApplications(
+  direction = session.role === 'external' ? 'ENTRANTE' : 'SALIENTE',
+) {
+  return filteredApps(direction);
+}
+function isClosedApplication(application) {
+  return /FINALIZAD|CONCLUID|RECHAZAD|NO_ADMITID|NO_ACEPTAD|CANCELAD/.test(application.status);
+}
+function getActiveStudentApplication() {
+  return getStudentApplications().find((application) => !isClosedApplication(application)) || null;
+}
+function getActiveMobilityApplication() {
+  return getMobilityApplications().find((application) => !isClosedApplication(application)) || null;
+}
+function openStudentApplication(id) {
+  closeModal();
+  selectedStudentApplicationId = id;
+  route = session.role === 'external' ? 'sgme' : 'sgms';
+  render();
+}
+function studentApplicationCard(application, active = false) {
+  const call = state.calls.find((item) => item.id === application.callId);
+  const uploaded = application.documents.filter((document) => document.storagePath).length;
+  return html`<article class="student-application-card ${active ? 'is-active' : ''}">
+    <div class="student-application-card-top">
+      <span>${active ? 'Postulación activa' : esc(call?.period || application.submitted)}</span>
+      ${badge(application.status)}
     </div>
-    <article class="card journey-card">
-      <div>
-        <h3>Tu postulación · ${esc(call?.title || 'Movilidad académica')}</h3>
-        <p>${completed} documentos aprobados · avance ${progress}%</p>
-        <div class="progress"><span style="width:${progress}%"></span></div>
-      </div>
-      <button class="btn btn-primary" onclick="go('tracking')">Ver seguimiento</button>
-    </article>
-    <div class="dashboard-columns student-columns">
-      <article class="card opportunity-card">
-        <div class="eyebrow">Convocatoria abierta</div>
-        <h2>${esc(call?.title || 'Movilidad académica')}</h2>
-        <button class="btn btn-primary" onclick="go('calls')">Ver y postular</button>
+    <h3>${esc(call?.title || application.callTitle)}</h3>
+    <p>${application.displayId || application.id}</p>
+    <div class="student-application-progress">
+      <span>${uploaded} de ${application.documents.length} documentos cargados</span>
+      <strong>${application.progress}%</strong>
+    </div>
+    <div class="progress"><span style="width:${application.progress}%"></span></div>
+    <button
+      class="btn ${active ? 'btn-primary' : 'btn-soft'}"
+      onclick="openStudentApplication('${application.id}')"
+    >
+      Ver postulación
+    </button>
+  </article>`;
+}
+function studentApplicationsView(direction = 'SALIENTE') {
+  const isInbound = direction === 'ENTRANTE';
+  const applications = getMobilityApplications(direction);
+  const selected = applications.find(
+    (application) => application.id === selectedStudentApplicationId,
+  );
+  if (selected) return studentApplicationDetailView(selected);
+
+  const active = applications.find((application) => !isClosedApplication(application)) || null;
+  const history = applications.filter((application) => application.id !== active?.id);
+  $('#view').innerHTML =
+    head(
+      'Mis postulaciones',
+      isInbound
+        ? 'Consulta la postulación iniciada desde la nominación de tu universidad de origen.'
+        : 'Consulta tu proceso activo y el historial de tus movilidades desde un solo lugar.',
+      !active && !isInbound
+        ? html`<button class="btn btn-primary" onclick="go('calls')">
+            Explorar convocatorias
+          </button>`
+        : '',
+    ) +
+    html`<section class="student-applications-section">
+        <div class="student-section-heading">
+          <div>
+            <span>Proceso actual</span>
+            <h2>Postulación activa</h2>
+          </div>
+        </div>
+        ${
+          active
+            ? studentApplicationCard(active, true)
+            : html`<div class="student-applications-empty">
+                <h3>No tienes una postulación activa</h3>
+                <p>
+                  ${
+                    isInbound
+                      ? 'Cuando tu universidad registre la nominación y recibas la invitación, el proceso aparecerá aquí.'
+                      : 'Cuando elijas una convocatoria, tu proceso aparecerá aquí.'
+                  }
+                </p>
+                <button class="btn btn-primary" onclick="go('calls')">Ver convocatorias</button>
+              </div>`
+        }
+      </section>
+      <section class="student-applications-section">
+        <div class="student-section-heading">
+          <div>
+            <span>Procesos anteriores</span>
+            <h2>Historial</h2>
+          </div>
+          <strong>${history.length}</strong>
+        </div>
+        <div class="student-application-history">
+          ${
+            history.length
+              ? history.map((application) => studentApplicationCard(application)).join('')
+              : '<p class="muted">Todavía no tienes postulaciones anteriores.</p>'
+          }
+        </div>
+      </section>`;
+}
+function studentApplicationDetailView(application) {
+  const call = state.calls.find((item) => item.id === application.callId);
+  const uploaded = application.documents.filter((document) => document.storagePath).length;
+  const documentRows = application.documents.length
+    ? application.documents
+        .map(
+          (document) =>
+            html`<article class="student-document-row">
+              <div class="doc-icon">${document.storagePath ? 'PDF' : '—'}</div>
+              <div class="doc-main">
+                <strong>${esc(document.name)}</strong>
+                <small
+                  >${document.fileName ? esc(document.fileName) : 'Archivo pendiente'} ·
+                  ${document.required ? 'Obligatorio' : 'Opcional'}</small
+                >
+                ${
+                  document.reviewerComment
+                    ? html`<p class="student-document-comment">
+                        <strong>Observación de OCRI:</strong> ${esc(document.reviewerComment)}
+                      </p>`
+                    : ''
+                }
+              </div>
+              ${badge(document.status)}
+            </article>`,
+        )
+        .join('')
+    : '<p class="muted">Esta convocatoria no tiene documentos configurados.</p>';
+  $('#view').innerHTML =
+    head(
+      'Detalle de postulación',
+      application.displayId || application.id,
+      html`<button
+        class="btn btn-soft"
+        onclick="go('${session.role === 'external' ? 'sgme' : 'sgms'}')"
+      >
+        ← Mis postulaciones
+      </button>`,
+    ) +
+    html`<section class="student-application-summary">
+        <div>
+          <span>Convocatoria</span>
+          <h2>${esc(call?.title || application.callTitle)}</h2>
+          <p>${esc(call?.period || '')}${call?.end ? ` · Cierre ${shortDate(call.end)}` : ''}</p>
+        </div>
+        <div class="student-summary-status">
+          <span>Estado actual</span>
+          ${badge(application.status)}
+        </div>
+        <div class="student-summary-progress">
+          <span>Avance del expediente</span>
+          <strong>${application.progress}%</strong>
+          <div class="progress"><span style="width:${application.progress}%"></span></div>
+        </div>
+        ${
+          application.status === 'BORRADOR' && session.role === 'student'
+            ? html`<button
+                class="btn btn-primary"
+                onclick="openExistingApplication('${application.id}')"
+              >
+                Continuar postulación
+              </button>`
+            : ''
+        }
+      </section>
+      ${acceptanceLetterSection(application)}
+      <section class="card student-detail-section">
+        <div class="student-detail-heading">
+          <div>
+            <span>01</span>
+            <h2>Documentos</h2>
+          </div>
+          <strong>${uploaded} de ${application.documents.length} cargados</strong>
+        </div>
+        <div class="student-document-list">${documentRows}</div>
+      </section>
+      <section class="card student-detail-section">
+        <div class="student-detail-heading">
+          <div>
+            <span>02</span>
+            <h2>Estado y novedades</h2>
+          </div>
+        </div>
+        <div class="timeline">
+          ${application.history
+            .map(
+              (entry) =>
+                html`<div class="timeline-item">
+                  <div class="timeline-dot"></div>
+                  <div>
+                    <strong>${esc(entry[0])}</strong>
+                    <p>${esc(entry[1])}</p>
+                  </div>
+                </div>`,
+            )
+            .join('')}
+        </div>
+        ${workflowStrip(application)}
+      </section>`;
+}
+function studentDashboard() {
+  const applications = getStudentApplications();
+  const application = getActiveStudentApplication();
+  const call = application
+    ? state.calls.find((item) => item.id === application.callId)
+    : state.calls.find((item) => item.direction === 'SALIENTE' && item.status === 'ACTIVA');
+  const uploaded = application?.documents.filter((document) => document.storagePath).length || 0;
+  const totalDocuments = application?.documents.length || 0;
+  const nextStep = !application
+    ? ''
+    : application.status === 'BORRADOR'
+      ? 'Completa los datos y documentos pendientes antes de enviar tu postulación.'
+      : application.status === 'OBSERVADO'
+        ? 'Tienes observaciones pendientes. Revisa el detalle de tus documentos.'
+        : 'OCRI está revisando tu expediente. Aquí verás cualquier novedad del proceso.';
+  $('#view').innerHTML = html`<div class="dashboard-heading student-welcome">
+      <h1>Hola, ${esc(session.name.split(' ')[0])}.</h1>
+      <p>Encuentra rápidamente el estado de tu movilidad y tu siguiente acción.</p>
+    </div>
+    ${
+      application
+        ? html`<article class="student-active-card">
+            <div class="student-active-main">
+              <div class="eyebrow">Tu postulación activa</div>
+              <div class="student-active-heading">
+                <div>
+                  <h2>${esc(call?.title || application.callTitle)}</h2>
+                  <p>${esc(call?.period || '')} · ${badge(application.status)}</p>
+                </div>
+                <strong>${application.progress}%</strong>
+              </div>
+              <div class="progress"><span style="width:${application.progress}%"></span></div>
+              <p class="student-document-progress">
+                ${uploaded} de ${totalDocuments} documentos cargados
+              </p>
+            </div>
+            <div class="student-next-step">
+              <span>Siguiente paso</span>
+              <p>${nextStep}</p>
+              <div class="student-card-actions">
+                <button
+                  class="btn btn-primary"
+                  onclick="${
+                    application.status === 'BORRADOR'
+                      ? `openExistingApplication('${application.id}')`
+                      : `openStudentApplication('${application.id}')`
+                  }"
+                >
+                  ${application.status === 'BORRADOR' ? 'Continuar postulación' : 'Ver detalle'}
+                </button>
+                <button class="btn btn-soft" onclick="go('sgms')">Mis postulaciones</button>
+              </div>
+            </div>
+          </article>`
+        : html`<article class="student-empty-journey">
+            <div>
+              <div class="eyebrow">Tu movilidad</div>
+              <h2>No tienes una postulación activa</h2>
+              <p>Explora las convocatorias disponibles y elige la oportunidad adecuada para ti.</p>
+            </div>
+            <button class="btn btn-primary" onclick="go('calls')">Ver convocatorias</button>
+          </article>`
+    }
+    <div class="student-home-secondary">
+      <article class="card student-opportunity-summary">
+        <span>${call ? 'Convocatoria disponible' : 'Convocatorias'}</span>
+        <h3>${esc(call?.title || 'Próximamente publicaremos nuevas oportunidades')}</h3>
+        <button class="text-action" onclick="go('calls')">Explorar convocatorias →</button>
       </article>
-      <aside class="priority-card">
-        <h3>Próximas acciones</h3>
-        <ul>
-          <li>Revisar los requisitos de la convocatoria</li>
-          <li>Completar documentos pendientes</li>
-          <li>Enviar postulación antes del cierre</li>
-        </ul>
-      </aside>
+      <article class="card student-history-summary">
+        <span>Historial personal</span>
+        <strong>${applications.length}</strong>
+        <p>${applications.length === 1 ? 'postulación registrada' : 'postulaciones registradas'}</p>
+        <button class="text-action" onclick="go('sgms')">Ver mis postulaciones →</button>
+      </article>
     </div>`;
 }
+function workflowSteps(direction) {
+  if (direction === 'ENTRANTE')
+    return [
+      ['NOMINADO_ORIGEN', 'Nominado por universidad de origen'],
+      ['EN_EDICION', 'En edición por estudiante'],
+      ['POSTULADO', 'Postulado'],
+      ['VALIDADO_ORIGEN', 'Validado por universidad de origen'],
+      ['EN_REVISION_OCRI', 'En revisión OCRI y unidad académica'],
+      ['ACEPTADO', 'Aceptado por UNSAAC'],
+      ['EN_MOVILIDAD', 'En movilidad'],
+      ['CONCLUIDO', 'Concluido'],
+    ];
+  return [
+    ['BORRADOR', 'Borrador'],
+    ['POSTULADO', 'Postulado'],
+    ['EN_REVISION_OCRI', 'En revisión OCRI'],
+    ['NOMINADO_UNSAAC', 'Nominado por UNSAAC'],
+    ['EN_EVALUACION_DESTINO', 'En evaluación por universidad destino'],
+    ['ACEPTADO', 'Aceptado por universidad destino'],
+    ['EN_MOVILIDAD', 'En movilidad'],
+    ['CONCLUIDO', 'Concluido'],
+  ];
+}
+function workflowPosition(application) {
+  const status = application?.status || '';
+  const aliases = {
+    ENVIADA: 'POSTULADO',
+    OBSERVADA: 'EN_REVISION_OCRI',
+    APROBADA_OCRI: 'EN_REVISION_OCRI',
+    FINALIZADA: 'CONCLUIDO',
+    EN_REVISION_DOCUMENTAL: 'EN_REVISION_OCRI',
+    APROBADO_OCRI: 'EN_REVISION_OCRI',
+    OBSERVADO: 'EN_REVISION_OCRI',
+    BORRADOR: application?.direction === 'ENTRANTE' ? 'EN_EDICION' : 'BORRADOR',
+    NOMINADO: application?.direction === 'ENTRANTE' ? 'NOMINADO_ORIGEN' : 'NOMINADO_UNSAAC',
+    FINALIZADO: 'CONCLUIDO',
+  };
+  const normalized = aliases[status] || status;
+  return workflowSteps(application?.direction).findIndex(([key]) => key === normalized);
+}
+function workflowStrip(application) {
+  const steps = workflowSteps(application.direction);
+  const current = workflowPosition(application);
+  return html`<ol class="role-workflow" aria-label="Flujo de la postulación">
+    ${steps
+      .map(
+        ([, label], index) =>
+          html`<li
+            class="${index < current ? 'is-done' : ''} ${index === current ? 'is-current' : ''}"
+          >
+            <span>${String(index + 1).padStart(2, '0')}</span>
+            <strong>${label}</strong>
+          </li>`,
+      )
+      .join('')}
+  </ol>`;
+}
 function externalStudentDashboard() {
-  const application = filteredApps('ENTRANTE')[0],
-    university = application?.destination || session.university || 'Universidad de origen';
-  $('#view').innerHTML = html`<div class="dashboard-heading external-heading">
-      <div class="eyebrow">Movilidad entrante · 2026-II</div>
-      <h1>Bienvenida a tu movilidad en la UNSAAC</h1>
-      <p>
-        Tu universidad te ha nominado. Completa la información solicitada para que OCRI valide tu
-        ingreso.
-      </p>
+  const applications = getMobilityApplications('ENTRANTE');
+  const application = applications.find((item) => !isClosedApplication(item)) || null;
+  const university = session.university || 'tu universidad de origen';
+  const latestCall = state.calls.find(
+    (item) => item.direction === 'ENTRANTE' && item.status === 'ACTIVA',
+  );
+  $('#view').innerHTML = html`<div class="dashboard-heading student-welcome external-heading">
+      <div class="eyebrow">Movilidad entrante · SGME</div>
+      <h1>Hola, ${esc(session.name.split(' ')[0])}.</h1>
+      <p>Tu expediente comienza cuando ${esc(university)} registra tu nominación.</p>
     </div>
-    <article class="card journey-card external-status">
-      <div>
-        <h3>Nominación recibida · ${esc(university)}</h3>
-        <p>Siguiente paso: completar perfil académico y documentos de ingreso.</p>
-      </div>
-      <button class="btn btn-primary" onclick="go('profile')">Completar perfil</button>
-    </article>
-    <article class="arrival-route">
-      <h3>Tu ruta de ingreso</h3>
-      <ol>
-        <li class="current">01&nbsp;&nbsp; Nominación recibida</li>
-        <li>02&nbsp;&nbsp; Perfil académico</li>
-        <li>03&nbsp;&nbsp; Documentos y validación</li>
-        <li>04&nbsp;&nbsp; Carta de aceptación</li>
-      </ol>
-    </article>`;
+    ${
+      application
+        ? html`<article class="student-active-card inbound-active-card">
+              <div class="student-active-main">
+                <div class="eyebrow">Tu postulación activa</div>
+                <div class="student-active-heading">
+                  <div>
+                    <h2>${esc(application.callTitle)}</h2>
+                    <p>${badge(application.status)}</p>
+                  </div>
+                  <strong>${application.progress}%</strong>
+                </div>
+                <div class="progress"><span style="width:${application.progress}%"></span></div>
+              </div>
+              <div class="student-next-step">
+                <span>Siguiente paso</span>
+                <p>
+                  Completa los datos y documentos solicitados. Tu universidad validará el expediente
+                  antes de enviarlo a la UNSAAC.
+                </p>
+                <button
+                  class="btn btn-primary"
+                  onclick="openStudentApplication('${application.id}')"
+                >
+                  Ver mi postulación
+                </button>
+              </div>
+            </article>
+            <section class="card workflow-card">
+              <div class="section-title">
+                <h3>Tu ruta de ingreso</h3>
+                ${badge(application.status)}
+              </div>
+              ${workflowStrip(application)}
+            </section>`
+        : html`<article class="student-empty-journey nomination-gate">
+            <div>
+              <div class="eyebrow">Paso previo obligatorio</div>
+              <h2>Aún no recibimos tu nominación</h2>
+              <p>
+                No necesitas iniciar una postulación por tu cuenta. La oficina de movilidad de tu
+                universidad debe nominarte y SIGMA te enviará la invitación.
+              </p>
+            </div>
+            <button class="btn btn-soft" onclick="go('calls')">Consultar convocatorias</button>
+          </article>`
+    }
+    <div class="student-home-secondary">
+      <article class="card student-opportunity-summary">
+        <span>Convocatoria entrante</span>
+        <h3>${esc(latestCall?.title || 'No hay una convocatoria entrante activa')}</h3>
+        <button class="text-action" onclick="go('calls')">Ver información →</button>
+      </article>
+      <article class="card student-history-summary">
+        <span>Historial personal</span>
+        <strong>${applications.length}</strong>
+        <p>${applications.length === 1 ? 'postulación registrada' : 'postulaciones registradas'}</p>
+        <button class="text-action" onclick="go('sgme')">Ver mis postulaciones →</button>
+      </article>
+    </div>`;
 }
 function managerDashboard() {
-  const university = session.university || 'su universidad',
-    nominations = state.nominations.filter((n) => n.university === session.university);
-  $('#view').innerHTML = html`<div class="dashboard-heading manager-heading">
-      <h1>Nominaciones de tu universidad</h1>
-      <p>Solo ves y administras procesos de ${esc(university)}.</p>
-      <button class="btn btn-primary" onclick="nominationModal()">＋ Nueva nominación</button>
-    </div>
-    <article class="card manager-table">
-      <div class="manager-table-head">
-        <span>Estudiante</span><span>Programa</span><span>Periodo</span><span>Estado</span>
+  return managerOverview();
+}
+function operationalMetric(value, label, target) {
+  return html`<button class="operational-metric" onclick="go('${target}')">
+    <strong>${value}</strong><span>${label}</span><small>Consultar →</small>
+  </button>`;
+}
+function adminDashboard(apps) {
+  const active = apps.filter((a) => !isClosedApplication(a) && a.status !== 'BORRADOR');
+  const closing = state.calls.filter((c) => {
+    const days = (new Date(`${c.end}T23:59:59`) - new Date()) / 86400000;
+    return c.status === 'ACTIVA' && days >= 0 && days <= 14;
+  });
+  $('#view').innerHTML =
+    head(
+      'Panel general',
+      'Prioridades y seguimiento de la movilidad académica.',
+      '<button class="btn btn-primary" onclick="callModal()">+ Nueva convocatoria</button>',
+    ) +
+    html`<div class="operational-metrics">
+        ${operationalMetric(active.filter((a) => /POSTULAD|REVISION|VALIDACION/.test(a.status)).length, 'Expedientes por revisar', 'applications')}
+        ${operationalMetric(active.filter((a) => a.status === 'OBSERVADO').length, 'Subsanaciones pendientes', 'applications')}
+        ${operationalMetric(active.filter((a) => a.direction === 'SALIENTE' && a.status === 'APROBADO_OCRI').length, 'Pendientes de nominación', 'applications')}
+        ${operationalMetric(active.filter((a) => a.direction === 'SALIENTE' && /NOMINAD|EVALUACION_DESTINO/.test(a.status)).length, 'Esperan decisión de destino', 'applications')}
+        ${operationalMetric(active.filter((a) => a.status === 'EN_MOVILIDAD').length, 'Movilidades en curso', 'applications')}
+        ${operationalMetric(closing.length, 'Convocatorias por cerrar · 14 días', 'calls')}
       </div>
-      ${
-        nominations.length
-          ? nominations
-              .map(
-                (n) =>
-                  html`<div class="manager-row">
-                    <strong>${esc(n.student)}<small>${esc(n.email)}</small></strong
-                    ><span>Movilidad académica</span><span>2026-II</span>${badge(n.status)}
-                  </div>`,
-              )
-              .join('')
-          : '<div class="empty">Aún no hay nominaciones registradas.</div>'
-      }
-    </article>`;
+      <div class="role-flow-grid">
+        <article class="card role-flow-card">
+          <span class="eyebrow">SGMS · Saliente</span>
+          <h2>De la UNSAAC al mundo</h2>
+          <p>OCRI revisa y nomina. La universidad de destino decide la aceptación.</p>
+          <button class="btn btn-soft" onclick="openOperationalQueue('SALIENTE')">
+            ${active.filter((a) => a.direction === 'SALIENTE').length} expedientes activos →
+          </button>
+        </article>
+        <article class="card role-flow-card inbound">
+          <span class="eyebrow">SGME · Entrante</span>
+          <h2>Del mundo a la UNSAAC</h2>
+          <p>
+            La universidad de origen nomina y valida. OCRI coordina la evaluación académica en la
+            UNSAAC.
+          </p>
+          <button class="btn btn-soft" onclick="openOperationalQueue('ENTRANTE')">
+            ${active.filter((a) => a.direction === 'ENTRANTE').length} expedientes activos →
+          </button>
+        </article>
+      </div>
+      <section class="card operational-section">
+        <div class="section-title">
+          <h3>Expedientes recientes</h3>
+          <button class="text-action" onclick="go('applications')">Ver todos →</button>
+        </div>
+        ${operationalTable(active.slice(0, 6))}
+      </section>`;
+}
+let operationalDirection = '';
+function openOperationalQueue(direction) {
+  operationalDirection = direction;
+  go('applications');
+}
+function operationalTable(apps) {
+  if (!apps.length)
+    return '<div class="empty">No hay expedientes que coincidan con esta selección.</div>';
+  return html`<div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Estudiante / expediente</th>
+          <th>Flujo y convocatoria</th>
+          <th>Estado</th>
+          <th>Fecha de registro o envío</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${apps
+          .map(
+            (a) =>
+              html`<tr>
+                <td>
+                  <strong>${esc(a.student)}</strong><br /><small>${esc(a.displayId || a.id)}</small>
+                </td>
+                <td>
+                  <span class="badge neutral"
+                    >${a.direction === 'SALIENTE' ? 'SGMS · Saliente' : 'SGME · Entrante'}</span
+                  >
+                  <p>${esc(a.callTitle)}</p>
+                </td>
+                <td>${badge(a.status)}</td>
+                <td>${esc(a.submitted)}</td>
+                <td>
+                  <button class="btn btn-soft btn-sm" onclick="detailModal('${a.id}')">
+                    Ver expediente
+                  </button>
+                </td>
+              </tr>`,
+          )
+          .join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+function adminApplicationsView() {
+  const apps = state.applications.filter((a) => a.status !== 'BORRADOR');
+  const options = (values) =>
+    [...new Set(values.filter(Boolean))]
+      .map((v) => `<option value="${esc(v)}">${esc(STATUS_LABELS[v] || v)}</option>`)
+      .join('');
+  $('#view').innerHTML =
+    head('Expedientes', 'Consulta cada proceso, sus documentos y su estado actual.') +
+    html` <section class="card operational-section">
+      <form
+        id="queueFilters"
+        class="queue-filters"
+        onsubmit="event.preventDefault()"
+        oninput="filterOperationalQueue()"
+      >
+        <label
+          >Buscar<input class="input" name="search" placeholder="Estudiante o convocatoria"
+        /></label>
+        <label
+          >Flujo<select class="input" name="direction">
+            <option value="">Todos los flujos</option>
+            <option value="SALIENTE" ${operationalDirection === 'SALIENTE' ? 'selected' : ''}>
+              SGMS · Saliente
+            </option>
+            <option value="ENTRANTE" ${operationalDirection === 'ENTRANTE' ? 'selected' : ''}>
+              SGME · Entrante
+            </option>
+          </select></label
+        >
+        <label
+          >Estado<select class="input" name="status">
+            <option value="">Todos los estados</option>
+            ${options(apps.map((a) => a.status))}
+          </select></label
+        >
+        <label
+          >Periodo<select class="input" name="period">
+            <option value="">Todos los periodos</option>
+            ${options(state.calls.map((c) => c.period))}
+          </select></label
+        >
+        <label
+          >Carta<select class="input" name="letter">
+            <option value="">Todas las cartas</option>
+            <option value="waiting">Esperando carta</option>
+            <option value="review">Carta por revisar</option>
+          </select></label
+        >
+        <label
+          >Facultad<select class="input" name="faculty">
+            <option value="">Todas las facultades</option>
+            ${options(apps.map((a) => a.faculty))}
+          </select></label
+        >
+      </form>
+      <p id="queueCount" class="muted" aria-live="polite"></p>
+      <div id="queueRows"></div>
+    </section>`;
+  filterOperationalQueue();
+}
+function filterOperationalQueue() {
+  const form = $('#queueFilters');
+  if (!form || session.role !== 'admin') return;
+  const filters = Object.fromEntries(new FormData(form));
+  const apps = state.applications.filter((a) => {
+    const call = state.calls.find((c) => c.id === a.callId);
+    return (
+      a.status !== 'BORRADOR' &&
+      (!filters.direction || filters.direction === a.direction) &&
+      (!filters.status || filters.status === a.status) &&
+      (!filters.period || filters.period === call?.period) &&
+      (!filters.faculty || filters.faculty === a.faculty) &&
+      (!filters.letter ||
+        (filters.letter === 'review'
+          ? a.letter?.status === 'PENDIENTE'
+          : !a.letter && ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO'].includes(a.status))) &&
+      `${a.student} ${a.callTitle} ${a.displayId}`
+        .toLowerCase()
+        .includes(filters.search.trim().toLowerCase())
+    );
+  });
+  $('#queueCount').textContent = `${apps.length} expedientes`;
+  $('#queueRows').innerHTML = operationalTable(apps);
+}
+function plannedArea(title, description, steps) {
+  return (
+    head(title, description) +
+    html`<section class="card operational-section">
+      <span class="badge warn">Próxima etapa</span>
+      <h2>Así funcionará este apartado</h2>
+      <ol class="planned-steps">
+        ${steps.map((s) => `<li>${esc(s)}</li>`).join('')}
+      </ol>
+      <p class="muted">El registro de estas operaciones todavía no está habilitado.</p>
+    </section>`
+  );
+}
+function academicReviewView() {
+  $('#view').innerHTML = plannedArea(
+    'Evaluación académica',
+    'Opiniones de las unidades académicas para movilidad entrante.',
+    [
+      'OCRI deriva el expediente validado a la unidad académica correspondiente.',
+      'Se registra el dictamen y sus observaciones.',
+      'OCRI comunica la decisión de admisión al estudiante y a su universidad.',
+    ],
+  );
+}
+function lettersView() {
+  $('#view').innerHTML = plannedArea(
+    'Cartas',
+    'Documentos institucionales asociados a cada expediente.',
+    [
+      'SGMS: registrar la carta de aceptación emitida por la universidad de destino.',
+      'SGME: emitir o adjuntar la carta de aceptación de la UNSAAC tras la evaluación.',
+      'Consultar la carta desde el detalle de la postulación correspondiente.',
+    ],
+  );
+}
+function auditView() {
+  $('#view').innerHTML = plannedArea(
+    'Auditoría',
+    'Trazabilidad institucional de cambios y decisiones.',
+    [
+      'Consultar quién realizó una operación y cuándo.',
+      'Revisar cambios de estado, documentos y decisiones por expediente.',
+      'Distinguir las notas internas de las comunicaciones visibles para el estudiante.',
+    ],
+  );
+}
+function managerNominations() {
+  return session.university
+    ? state.nominations.filter((n) => n.university === session.university)
+    : [];
+}
+function managerOverview() {
+  const nominations = managerNominations();
+  $('#view').innerHTML =
+    head('Resumen de movilidad entrante', esc(session.university || 'Universidad asociada')) +
+    html` <div class="operational-metrics">
+        ${operationalMetric(nominations.length, 'Nominaciones registradas', 'nominations')}
+        ${operationalMetric(nominations.filter((n) => /EDICION|BORRADOR|INVITACION/.test(n.status)).length, 'Pendientes del estudiante', 'manager_students')}
+        ${operationalMetric(nominations.filter((n) => n.status === 'POSTULADO').length, 'Por validar en origen', 'manager_students')}
+        ${operationalMetric(nominations.filter((n) => /ACEPTAD|NO_ADMITID|CONCLUID/.test(n.status)).length, 'Resultados registrados', 'manager_results')}
+      </div>
+      <section class="card role-flow-card">
+        <span class="eyebrow">Universidad de origen → UNSAAC</span>
+        <h2>Acompaña cada nominación</h2>
+        <p>Nominar → estudiante completa → universidad valida → UNSAAC evalúa → resultado.</p>
+        <button class="btn btn-primary" onclick="go('nominations')">Gestionar nominaciones</button>
+        <button class="btn btn-soft" onclick="go('calls')">Consultar convocatorias</button>
+      </section>
+      <section class="card operational-section">
+        <h3>Últimas nominaciones</h3>
+        ${nominations.length ? nomTable(nominations.slice(0, 5)) : '<div class="empty">Aún no hay nominaciones registradas para tu universidad.</div>'}
+      </section>`;
+}
+function managerStudentsView() {
+  const nominations = managerNominations();
+  $('#view').innerHTML =
+    head(
+      'Estudiantes',
+      'Personas nominadas por ' + esc(session.university || 'tu universidad') + '.',
+    ) +
+    html`<section class="card operational-section">
+      ${nominations.length ? nomTable(nominations) : '<div class="empty">Los estudiantes aparecerán cuando se registre su nominación.</div>'}
+    </section>`;
+}
+function managerResultsView() {
+  const results = managerNominations().filter((n) =>
+    /ACEPTAD|NO_ADMITID|RECHAZAD|CONCLUID|FINALIZAD|CANCELAD/.test(n.status),
+  );
+  $('#view').innerHTML =
+    head(
+      'Resultados',
+      'Decisiones registradas por la UNSAAC sobre las nominaciones de tu universidad.',
+    ) +
+    html`<section class="card operational-section">
+      ${results.length ? nomTable(results) : '<div class="empty">Todavía no hay resultados de admisión registrados.</div>'}
+    </section>`;
 }
 function trackingView() {
   const application = filteredApps(session.role === 'student' ? 'SALIENTE' : 'ENTRANTE')[0];
@@ -2420,18 +3099,30 @@ function showCallSummary(id) {
             Eliminar convocatoria
           </button>`
       : '';
+  const activeStudentApplication =
+    session?.role === 'student' ? getActiveStudentApplication() : null;
   const studentAction =
     session?.role === 'student' && call.direction === 'SALIENTE'
-      ? application && application.status !== 'BORRADOR'
-        ? html`<button
-            class="btn btn-primary"
-            onclick="openExistingApplication('${application.id}')"
-          >
-            Ver mi postulación
-          </button>`
-        : html`<button class="btn btn-primary" onclick="startApplication('${call.id}')">
-            ${application ? 'Continuar postulación' : 'Postular'}
-          </button>`
+      ? activeStudentApplication && activeStudentApplication.callId !== call.id
+        ? html`<div class="call-active-restriction">
+            <span>Ya tienes una postulación activa.</span>
+            <button
+              class="btn btn-primary"
+              onclick="openStudentApplication('${activeStudentApplication.id}')"
+            >
+              Ver mi postulación
+            </button>
+          </div>`
+        : application && application.status !== 'BORRADOR'
+          ? html`<button
+              class="btn btn-primary"
+              onclick="openStudentApplication('${application.id}')"
+            >
+              Ver mi postulación
+            </button>`
+          : html`<button class="btn btn-primary" onclick="startApplication('${call.id}')">
+              ${application ? 'Continuar postulación' : 'Postular'}
+            </button>`
       : '';
   const coverStyle = call.coverImage
     ? ` style="background-image:url('${esc(call.coverImage)}')"`
@@ -2551,8 +3242,102 @@ function filterCards(v) {
 // -----------------------------------------------------------------------------
 // Postulaciones, nominaciones y gestión documental de demostración
 // -----------------------------------------------------------------------------
+function acceptanceLetterSection(a) {
+  const admin = session.role === 'admin';
+  const eligible = ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO'].includes(a.status);
+  const canUpload = admin
+    ? ['APROBADA_OCRI', 'NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO', 'ACEPTADO'].includes(a.status)
+    : a.direction === 'SALIENTE' && a.applicantId === session.userId && eligible;
+  return html`<section class="card operational-section">
+    <h3>
+      Carta de aceptación · ${a.direction === 'SALIENTE' ? 'Universidad de destino' : 'UNSAAC'}
+    </h3>
+    <p>
+      ${a.direction === 'SALIENTE' ? 'Adjunta la carta cuando la universidad de destino te la envíe, después de tu nominación. No es un documento inicial.' : 'OCRI adjunta la carta de aceptación emitida por la UNSAAC.'}
+    </p>
+    ${
+      a.letter
+        ? html`<p>${esc(a.letter.file_name)} · ${badge(a.letter.status)}</p>
+            <p>${esc(a.letter.comment)}</p>
+            <button class="btn btn-soft" onclick="downloadAcceptanceLetter('${a.id}')">
+              Descargar carta
+            </button>`
+        : `<p class="muted">${eligible ? 'Esperando carta de aceptación.' : 'Disponible en una etapa posterior de la postulación.'}</p>`
+    }
+    ${canUpload ? html`<label class="btn btn-primary">Subir o reemplazar PDF<input type="file" class="visually-hidden" accept="application/pdf" onchange="uploadAcceptanceLetter('${a.id}',this)" /></label>` : ''}
+    ${admin && a.letter?.status === 'PENDIENTE' ? html`<button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',true)">Validar aceptación</button><button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',false)">Solicitar corrección</button>` : ''}
+    ${admin && a.direction === 'SALIENTE' && a.status === 'APROBADA_OCRI' ? html`<button class="btn btn-primary" onclick="nominateApplication('${a.id}')">Registrar nominación UNSAAC</button>` : ''}
+  </section>`;
+}
+async function refreshLetterView(id) {
+  await loadApplicationsFromDatabase();
+  closeModal();
+  render();
+  if (session.role === 'admin') detailModal(id);
+}
+async function uploadAcceptanceLetter(id, input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  if (file.type !== 'application/pdf' || file.size > 10485760)
+    return toast('Selecciona un PDF de hasta 10 MB.');
+  input.disabled = true;
+  try {
+    const path = `${id}/${crypto.randomUUID()}.pdf`;
+    const { error } = await supabase.storage.from('acceptance-letters').upload(path, file);
+    if (error) throw error;
+    const saved = await supabase.rpc('save_acceptance_letter', {
+      target: id,
+      path,
+      filename: file.name,
+    });
+    if (saved.error) throw saved.error;
+    await refreshLetterView(id);
+    toast('Carta guardada. Pendiente de revisión por OCRI.');
+  } catch (error) {
+    toast(error.message);
+    input.disabled = false;
+  }
+}
+async function downloadAcceptanceLetter(id) {
+  const letter = state.applications.find((a) => a.id === id)?.letter;
+  if (!letter) return;
+  const { data, error } = await supabase.storage
+    .from('acceptance-letters')
+    .download(letter.storage_path);
+  if (error) return toast(error.message);
+  const url = URL.createObjectURL(data),
+    link = document.createElement('a');
+  link.href = url;
+  link.download = letter.file_name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+async function reviewAcceptanceLetter(id, approved) {
+  const feedback = approved ? '' : prompt('Indica qué debe corregirse:');
+  if (feedback === null || (!approved && !feedback.trim())) return;
+  const { error } = await supabase.rpc('review_acceptance_letter', {
+    target: id,
+    approved,
+    feedback,
+  });
+  if (error) return toast(error.message);
+  await refreshLetterView(id);
+}
+async function nominateApplication(id) {
+  if (session.role !== 'admin') return;
+  const { data, error } = await supabase
+    .from('applications')
+    .update({ status: 'NOMINADO_UNSAAC' })
+    .eq('id', id)
+    .eq('status', 'APROBADA_OCRI')
+    .select('id');
+  if (error || !data?.length)
+    return toast(error?.message || 'El estado cambió. Actualiza el expediente.');
+  await refreshLetterView(id);
+}
 function detailModal(id) {
   const a = state.applications.find((x) => x.id === id);
+  if (!a) return;
   modal(
     html`<div class="modal-head">
         <div>
@@ -2561,19 +3346,12 @@ function detailModal(id) {
         </div>
         <button class="modal-close" onclick="closeModal()">×</button>
       </div>
-      ${applicationDetail(a)}${
+      ${applicationDetail(a)}${acceptanceLetterSection(a)}${
         /admin|reviewer/.test(session.role)
-          ? html`<div class="modal-actions">
-              <select id="appStatus" class="input">
-                <option>EN_REVISION_DOCUMENTAL</option>
-                <option>OBSERVADO</option>
-                <option>APROBADO_OCRI</option>
-                <option>RECHAZADO</option>
-                <option>FINALIZADO</option></select
-              ><button class="btn btn-primary" onclick="changeAppStatus('${a.id}')">
-                Actualizar estado
-              </button>
-            </div>`
+          ? html`<p class="muted">
+              Consulta del expediente. El registro de decisiones institucionales se habilitará en la
+              siguiente etapa.
+            </p>`
           : ''
       }`,
   );
@@ -2639,6 +3417,7 @@ function saveReview(id, i) {
   toast('Revisión guardada con trazabilidad');
 }
 function nominationModal() {
+  if (!['admin', 'external_manager'].includes(session.role)) return;
   modal(
     html`<div class="modal-head">
         <h2>Registrar nominación</h2>
@@ -2649,7 +3428,14 @@ function nominationModal() {
           <label>Estudiante</label><input class="input" name="student" required />
         </div>
         <div class="field">
-          <label>Universidad de origen</label><input class="input" name="university" required />
+          <label>Universidad de origen</label
+          ><input
+            class="input"
+            name="university"
+            value="${session.role === 'external_manager' ? esc(session.university || '') : ''}"
+            ${session.role === 'external_manager' ? 'readonly' : ''}
+            required
+          />
         </div>
         <div class="field"><label>País</label><input class="input" name="country" required /></div>
         <div class="field wide">
@@ -2658,18 +3444,23 @@ function nominationModal() {
         </div>
         <div class="modal-actions wide">
           <button type="button" class="btn btn-soft" onclick="closeModal()">Cancelar</button
-          ><button class="btn btn-primary">Enviar invitación</button>
+          ><button class="btn btn-primary">Guardar borrador de nominación</button>
         </div>
       </form>`,
   );
 }
 function createNomination(e) {
   e.preventDefault();
+  if (!['admin', 'external_manager'].includes(session.role)) return;
   const f = Object.fromEntries(new FormData(e.target));
+  if (session.role === 'external_manager') {
+    if (!session.university) return toast('Tu cuenta necesita una universidad asignada.');
+    f.university = session.university;
+  }
   state.nominations.unshift({
     id: `NOM-${String(state.nominations.length + 35).padStart(3, '0')}`,
     ...f,
-    status: 'INVITACION_ENVIADA',
+    status: 'BORRADOR',
   });
   save();
   closeModal();
@@ -2678,6 +3469,11 @@ function createNomination(e) {
 }
 async function startApplication(callId) {
   closeModal();
+  const activeApplication = getActiveStudentApplication();
+  if (activeApplication && activeApplication.callId !== callId) {
+    openStudentApplication(activeApplication.id);
+    return toast('Ya tienes una postulación activa. Finaliza ese proceso antes de iniciar otro.');
+  }
   if (!session.photoPath) {
     const { data: currentProfile, error: profileError } = await supabase
       .from('profiles')
@@ -3158,6 +3954,7 @@ Object.assign(window, {
   showRegister,
   showRecover,
   togglePassword,
+  toggleStudentAccountMenu,
   register,
   setPassword,
   signOut,
@@ -3179,7 +3976,13 @@ Object.assign(window, {
   downloadCallResource,
   deleteCall,
   filterCards,
+  openOperationalQueue,
+  filterOperationalQueue,
   detailModal,
+  uploadAcceptanceLetter,
+  downloadAcceptanceLetter,
+  reviewAcceptanceLetter,
+  nominateApplication,
   changeAppStatus,
   reviewModal,
   saveReview,
@@ -3192,6 +3995,7 @@ Object.assign(window, {
   createNomination,
   startApplication,
   openExistingApplication,
+  openStudentApplication,
   changeApplicationFaculty,
   changeApplicationSchool,
   selectApplicationDocument,
