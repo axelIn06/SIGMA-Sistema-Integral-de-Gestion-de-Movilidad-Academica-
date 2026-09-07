@@ -3292,25 +3292,53 @@ function detailModal(id) {
         <button class="modal-close" onclick="closeModal()">×</button>
       </div>
       ${applicationDetail(a)}${acceptanceLetterSection(a)}${
-        /admin|reviewer/.test(session.role)
-          ? html`<p class="muted">
-              Consulta del expediente. El registro de decisiones institucionales se habilitará en la
-              siguiente etapa.
-            </p>`
+        session.role === 'admin'
+          ? html`<div class="modal-actions">
+              <select id="appStatus" class="input">
+                ${applicationStatusOptions(a)}
+              </select>
+              <button class="btn btn-primary" onclick="changeAppStatus('${a.id}')">
+                Guardar estado
+              </button>
+            </div>`
           : ''
       }`,
   );
 }
-function changeAppStatus(id) {
-  const a = state.applications.find((x) => x.id === id),
-    s = $('#appStatus').value;
-  a.status = s;
-  a.history.push([s.replaceAll('_', ' '), new Date().toLocaleDateString('es-PE')]);
-  a.progress = s === 'APROBADO_OCRI' ? 100 : a.progress;
-  save();
-  closeModal();
-  render();
-  toast('Estado actualizado y registrado');
+function applicationStatusOptions(application) {
+  const routes = {
+    ENVIADA: ['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'APROBADA_OCRI', 'RECHAZADA'],
+    EN_REVISION_DOCUMENTAL: ['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'APROBADA_OCRI', 'RECHAZADA'],
+    OBSERVADA: ['EN_REVISION_DOCUMENTAL', 'APROBADA_OCRI', 'RECHAZADA'],
+    APROBADA_OCRI: ['APROBADA_OCRI', 'NOMINADO_UNSAAC', 'CANCELADO'],
+    NOMINADO_UNSAAC: ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO', 'CANCELADO'],
+    EN_EVALUACION_DESTINO: ['EN_EVALUACION_DESTINO', 'NO_ACEPTADO_DESTINO', 'CANCELADO'],
+    ACEPTADO: ['ACEPTADO', 'EN_MOVILIDAD', 'CANCELADO'],
+    EN_MOVILIDAD: ['EN_MOVILIDAD', 'FINALIZADA', 'CANCELADO'],
+  };
+  const allowed = routes[application.status] || [application.status];
+  return allowed
+    .map(
+      (status) =>
+        html`<option value="${status}" ${status === application.status ? 'selected' : ''}>
+          ${STATUS_LABELS[status] || status.replaceAll('_', ' ')}
+        </option>`,
+    )
+    .join('');
+}
+async function changeAppStatus(id) {
+  if (session.role !== 'admin') return;
+  const status = $('#appStatus')?.value;
+  if (!status) return;
+  const { data, error } = await supabase
+    .from('applications')
+    .update({ status })
+    .eq('id', id)
+    .select('id');
+  if (error || !data?.length)
+    return toast(error?.message || 'No se pudo actualizar el expediente.');
+  await refreshLetterView(id);
+  toast('Estado del expediente actualizado.');
 }
 function reviewModal(id, index) {
   const a = state.applications.find((x) => x.id === id),
