@@ -1225,15 +1225,6 @@ const views = {
   applications() {
     adminApplicationsView();
   },
-  academic_review() {
-    academicReviewView();
-  },
-  letters() {
-    lettersView();
-  },
-  audit() {
-    auditView();
-  },
   manager_students() {
     managerStudentsView();
   },
@@ -1980,52 +1971,6 @@ function filterOperationalQueue() {
   });
   $('#queueCount').textContent = `${apps.length} expedientes`;
   $('#queueRows').innerHTML = operationalTable(apps);
-}
-function plannedArea(title, description, steps) {
-  return (
-    head(title, description) +
-    html`<section class="card operational-section">
-      <span class="badge warn">Próxima etapa</span>
-      <h2>Así funcionará este apartado</h2>
-      <ol class="planned-steps">
-        ${steps.map((s) => `<li>${esc(s)}</li>`).join('')}
-      </ol>
-      <p class="muted">El registro de estas operaciones todavía no está habilitado.</p>
-    </section>`
-  );
-}
-function academicReviewView() {
-  $('#view').innerHTML = plannedArea(
-    'Evaluación académica',
-    'Opiniones de las unidades académicas para movilidad entrante.',
-    [
-      'OCRI deriva el expediente validado a la unidad académica correspondiente.',
-      'Se registra el dictamen y sus observaciones.',
-      'OCRI comunica la decisión de admisión al estudiante y a su universidad.',
-    ],
-  );
-}
-function lettersView() {
-  $('#view').innerHTML = plannedArea(
-    'Cartas',
-    'Documentos institucionales asociados a cada expediente.',
-    [
-      'SGMS: registrar la carta de aceptación emitida por la universidad de destino.',
-      'SGME: emitir o adjuntar la carta de aceptación de la UNSAAC tras la evaluación.',
-      'Consultar la carta desde el detalle de la postulación correspondiente.',
-    ],
-  );
-}
-function auditView() {
-  $('#view').innerHTML = plannedArea(
-    'Auditoría',
-    'Trazabilidad institucional de cambios y decisiones.',
-    [
-      'Consultar quién realizó una operación y cuándo.',
-      'Revisar cambios de estado, documentos y decisiones por expediente.',
-      'Distinguir las notas internas de las comunicaciones visibles para el estudiante.',
-    ],
-  );
 }
 function managerNominations() {
   return session.university
