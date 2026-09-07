@@ -1232,11 +1232,12 @@ const views = {
     managerResultsView();
   },
   nominations() {
-    const action = /admin|external_manager/.test(session.role)
-      ? html`<button class="btn btn-primary" onclick="nominationModal()">
-          + Nueva nominación
-        </button>`
-      : '';
+    const action =
+      session.role === 'external_manager'
+        ? html`<button class="btn btn-primary" onclick="nominationModal()">
+            + Nueva nominación
+          </button>`
+        : '';
     const nominations =
       session.role === 'external_manager'
         ? state.nominations.filter((n) => n.university === session.university)
@@ -3189,16 +3190,17 @@ function filterCards(v) {
 // -----------------------------------------------------------------------------
 function acceptanceLetterSection(a) {
   const admin = session.role === 'admin';
-  const eligible = ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO'].includes(a.status);
-  const canUpload = admin
-    ? ['APROBADA_OCRI', 'NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO', 'ACEPTADO'].includes(a.status)
-    : a.direction === 'SALIENTE' && a.applicantId === session.userId && eligible;
+  const isOutgoing = a.direction === 'SALIENTE';
+  const isNominated = ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO'].includes(a.status);
+  const canStudentUpload = isOutgoing && a.applicantId === session.userId && isNominated;
+  const canOcriUpload = !isOutgoing && admin && ['APROBADA_OCRI', 'ACEPTADO'].includes(a.status);
+  const canValidate = admin && isOutgoing && a.letter?.status === 'PENDIENTE';
   return html`<section class="card operational-section">
     <h3>
       Carta de aceptación · ${a.direction === 'SALIENTE' ? 'Universidad de destino' : 'UNSAAC'}
     </h3>
     <p>
-      ${a.direction === 'SALIENTE' ? 'Adjunta la carta cuando la universidad de destino te la envíe, después de tu nominación. No es un documento inicial.' : 'OCRI adjunta la carta de aceptación emitida por la UNSAAC.'}
+      ${isOutgoing ? 'La carta se habilita solo después de que OCRI registre la nominación UNSAAC. El estudiante la adjunta cuando la universidad de destino la emite.' : 'OCRI adjunta la carta de aceptación emitida por la UNSAAC cuando el expediente entrante sea admitido.'}
     </p>
     ${
       a.letter
@@ -3207,10 +3209,10 @@ function acceptanceLetterSection(a) {
             <button class="btn btn-soft" onclick="downloadAcceptanceLetter('${a.id}')">
               Descargar carta
             </button>`
-        : `<p class="muted">${eligible ? 'Esperando carta de aceptación.' : 'Disponible en una etapa posterior de la postulación.'}</p>`
+        : `<p class="muted">${isNominated ? 'Esperando carta de aceptación de la universidad de destino.' : 'Aún no corresponde cargar una carta en esta etapa.'}</p>`
     }
-    ${canUpload ? html`<label class="btn btn-primary">Subir o reemplazar PDF<input type="file" class="visually-hidden" accept="application/pdf" onchange="uploadAcceptanceLetter('${a.id}',this)" /></label>` : ''}
-    ${admin && a.letter?.status === 'PENDIENTE' ? html`<button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',true)">Validar aceptación</button><button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',false)">Solicitar corrección</button>` : ''}
+    ${canStudentUpload || canOcriUpload ? html`<label class="btn btn-primary">${a.letter ? 'Reemplazar carta PDF' : 'Subir carta PDF'}<input type="file" class="visually-hidden" accept="application/pdf" onchange="uploadAcceptanceLetter('${a.id}',this)" /></label>` : ''}
+    ${canValidate ? html`<button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',true)">Validar aceptación</button><button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',false)">Solicitar corrección</button>` : ''}
     ${admin && a.direction === 'SALIENTE' && a.status === 'APROBADA_OCRI' ? html`<button class="btn btn-primary" onclick="nominateApplication('${a.id}')">Registrar nominación UNSAAC</button>` : ''}
   </section>`;
 }
@@ -3310,11 +3312,18 @@ function applicationStatusOptions(application) {
     ENVIADA: ['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'APROBADA_OCRI', 'RECHAZADA'],
     EN_REVISION_DOCUMENTAL: ['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'APROBADA_OCRI', 'RECHAZADA'],
     OBSERVADA: ['EN_REVISION_DOCUMENTAL', 'APROBADA_OCRI', 'RECHAZADA'],
-    APROBADA_OCRI: ['APROBADA_OCRI', 'NOMINADO_UNSAAC', 'CANCELADO'],
+    APROBADA_OCRI: ['APROBADA_OCRI', 'CANCELADO'],
     NOMINADO_UNSAAC: ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO', 'CANCELADO'],
     EN_EVALUACION_DESTINO: ['EN_EVALUACION_DESTINO', 'NO_ACEPTADO_DESTINO', 'CANCELADO'],
     ACEPTADO: ['ACEPTADO', 'EN_MOVILIDAD', 'CANCELADO'],
     EN_MOVILIDAD: ['EN_MOVILIDAD', 'FINALIZADA', 'CANCELADO'],
+    CANCELADO: [
+      'EN_REVISION_DOCUMENTAL',
+      'APROBADA_OCRI',
+      'NOMINADO_UNSAAC',
+      'EN_EVALUACION_DESTINO',
+      'ACEPTADO',
+    ],
   };
   const allowed = routes[application.status] || [application.status];
   return allowed
@@ -3390,7 +3399,7 @@ function saveReview(id, i) {
   toast('Revisión guardada con trazabilidad');
 }
 function nominationModal() {
-  if (!['admin', 'external_manager'].includes(session.role)) return;
+  if (session.role !== 'external_manager') return;
   modal(
     html`<div class="modal-head">
         <h2>Registrar nominación</h2>
@@ -3424,7 +3433,7 @@ function nominationModal() {
 }
 function createNomination(e) {
   e.preventDefault();
-  if (!['admin', 'external_manager'].includes(session.role)) return;
+  if (session.role !== 'external_manager') return;
   const f = Object.fromEntries(new FormData(e.target));
   if (session.role === 'external_manager') {
     if (!session.university) return toast('Tu cuenta necesita una universidad asignada.');
