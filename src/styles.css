@@ -1313,18 +1313,19 @@ textarea:focus-visible {
 }
 .badge[data-tooltip]::after {
   position: absolute;
-  z-index: 20;
-  bottom: calc(100% + 9px);
+  z-index: 40;
+  bottom: calc(100% + 7px);
   left: 50%;
   width: max-content;
-  max-width: min(280px, 76vw);
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: #35111d;
+  max-width: min(240px, calc(100vw - 32px));
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 7px;
+  background: rgba(43, 13, 25, 0.96);
   color: #fff;
   content: attr(data-tooltip);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 10px;
+  font-weight: 650;
   letter-spacing: normal;
   line-height: 1.4;
   opacity: 0;
@@ -1353,6 +1354,114 @@ textarea:focus-visible {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.4;
+}
+.admin-status-panel {
+  margin-top: 24px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-muted);
+}
+.admin-status-panel-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.admin-status-panel h3 {
+  margin: 4px 0 0;
+  font-size: 17px;
+}
+.admin-status-panel .modal-actions {
+  margin-top: 14px;
+}
+.admin-status-flow {
+  position: relative;
+  flex: 0 0 auto;
+}
+.admin-status-flow summary {
+  color: var(--maroon);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 760;
+  list-style: none;
+  white-space: nowrap;
+}
+.admin-status-flow summary::-webkit-details-marker {
+  display: none;
+}
+.admin-status-flow summary::after {
+  margin-left: 6px;
+  content: '⌄';
+}
+.admin-status-flow[open] summary::after {
+  content: '⌃';
+}
+.admin-status-flow-content {
+  position: absolute;
+  z-index: 35;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(480px, calc(100vw - 80px));
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: 0 15px 40px rgba(45, 13, 25, 0.18);
+}
+.admin-status-flow-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.admin-status-flow-line span {
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--cream);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 750;
+}
+.admin-status-flow-line span.is-final {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.admin-status-flow-line i {
+  color: var(--gold-dark);
+  font-size: 12px;
+  font-style: normal;
+}
+.admin-status-flow-branches {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.admin-status-flow-branches p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.application-concluded-note {
+  display: grid;
+  gap: 3px;
+  padding: 15px 17px;
+  margin-top: 22px;
+  border: 1px solid #bdddcf;
+  border-radius: 14px;
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.application-concluded-note strong {
+  font-size: 13px;
+}
+.application-concluded-note span {
+  font-size: 11px;
 }
 .badge.ok {
   background: #e5f4ee;
@@ -1486,6 +1595,22 @@ textarea.input {
   border-radius: 20px;
   background: var(--surface);
   box-shadow: 0 30px 80px rgba(28, 6, 15, 0.36);
+}
+.modal.application-detail-dialog {
+  width: min(1080px, 100%);
+  max-height: 94vh;
+  padding: clamp(24px, 3vw, 38px);
+}
+.application-detail-dialog .grid-2 {
+  gap: 18px;
+}
+.application-document-item {
+  grid-template-columns: 42px minmax(0, 1fr) auto auto;
+}
+.application-document-item .doc-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .modal-head {
   display: flex;
@@ -2962,6 +3087,22 @@ textarea.input {
 }
 
 @media (max-width: 760px) {
+  .modal.application-detail-dialog {
+    width: 100%;
+    max-height: 100vh;
+    padding: 22px 16px;
+    border-radius: 0;
+  }
+  .application-detail-dialog .grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .application-document-item {
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+  }
+  .application-document-item > .btn {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
   .login-shell {
     grid-template-columns: 1fr;
   }
@@ -3402,8 +3543,7 @@ textarea.input {
   color: var(--muted);
   line-height: 1.65;
 }
-.operational-section,
-.workflow-card {
+.operational-section {
   margin-top: 24px;
 }
 .queue-filters {
@@ -3427,41 +3567,6 @@ textarea.input {
   padding-left: 24px;
   line-height: 1.6;
 }
-.role-workflow {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-  padding: 0;
-  margin: 24px 0 0;
-  list-style: none;
-}
-.role-workflow li {
-  display: grid;
-  align-content: start;
-  gap: 10px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  color: var(--muted);
-  background: var(--surface-muted);
-}
-.role-workflow li span {
-  font-size: 12px;
-  color: var(--maroon);
-}
-.role-workflow li strong {
-  font-size: 12px;
-  line-height: 1.5;
-}
-.role-workflow .is-current {
-  border-color: var(--maroon);
-  background: #f7eaee;
-  color: var(--maroon);
-}
-.role-workflow .is-done {
-  border-color: #bcdacc;
-  background: #f0f8f4;
-}
 @media (max-width: 700px) {
   .role-flow-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -3479,8 +3584,18 @@ textarea.input {
   .role-flow-card {
     padding: 20px;
   }
-  .role-workflow {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .admin-status-panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .admin-status-flow-content {
+    right: auto;
+    left: 0;
+    width: min(480px, calc(100vw - 64px));
+  }
+  .admin-status-panel .modal-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 .sgmee-shell {

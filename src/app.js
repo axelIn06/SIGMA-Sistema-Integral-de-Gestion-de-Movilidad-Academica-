@@ -75,6 +75,7 @@ const STATUS_LABELS = {
   EN_MOVILIDAD: 'En movilidad',
   CONCLUIDO: 'Concluido',
   FINALIZADO: 'Concluido',
+  RECHAZADA: 'Rechazado',
   CANCELADO: 'Cancelado',
   INVITACION_ENVIADA: 'Invitación enviada',
 };
@@ -83,14 +84,17 @@ const STATUS_DESCRIPTIONS = {
   ENVIADA: 'El estudiante envió su expediente y OCRI puede iniciar la revisión.',
   EN_REVISION_DOCUMENTAL: 'OCRI revisa los datos y documentos del expediente.',
   OBSERVADA: 'OCRI solicitó corregir o completar información antes de continuar.',
+  OBSERVADO: 'Hay una observación pendiente de corrección antes de continuar.',
   APROBADA_OCRI: 'OCRI aprobó el expediente; queda listo para registrar la nominación.',
   NOMINADO_UNSAAC: 'UNSAAC comunicó formalmente la nominación a la universidad de destino.',
   EN_EVALUACION_DESTINO: 'La universidad de destino evalúa la postulación y sus requisitos.',
-  NO_ACEPTADO_DESTINO: 'La universidad de destino no aceptó la postulación.',
+  NO_ACEPTADO_DESTINO:
+    'La universidad de destino no aceptó la postulación. OCRI puede reabrir la evaluación si corresponde.',
   ACEPTADO: 'La carta de aceptación fue validada y el estudiante puede continuar el trámite.',
   EN_MOVILIDAD: 'El periodo de movilidad académica ya está en curso.',
   FINALIZADA: 'La movilidad académica concluyó.',
-  RECHAZADA: 'OCRI determinó que el expediente no continúa en este proceso.',
+  RECHAZADA:
+    'OCRI rechazó el expediente. Puede devolverse a revisión si se detecta un error o se presenta una corrección.',
   CANCELADO: 'El proceso se detuvo. OCRI puede restaurarlo a la etapa correcta si fue un error.',
   INVITACION_ENVIADA:
     'La universidad de origen recibió la invitación para que el estudiante complete el proceso.',
@@ -351,9 +355,9 @@ function badge(status) {
           : 'neutral';
   return html`<span
     class="badge ${cls}"
-    title="${esc(description)}"
     data-tooltip="${esc(description)}"
     aria-label="${esc(`${s}. ${description}`)}"
+    tabindex="0"
     >${esc(s)}</span
   >`;
 }
@@ -1416,7 +1420,9 @@ function getMobilityApplications(
   return filteredApps(direction);
 }
 function isClosedApplication(application) {
-  return /FINALIZAD|CONCLUID|RECHAZAD|NO_ADMITID|NO_ACEPTAD|CANCELAD/.test(application.status);
+  // Solo una movilidad concluida cierra definitivamente el expediente.
+  // Los demás estados pueden necesitar corrección o una reapertura por OCRI.
+  return /FINALIZAD|CONCLUID|FINALIZADO/.test(application.status);
 }
 function getActiveStudentApplication() {
   return getStudentApplications().find((application) => !isClosedApplication(application)) || null;
@@ -1612,7 +1618,6 @@ function studentApplicationDetailView(application) {
             )
             .join('')}
         </div>
-        ${workflowStrip(application)}
       </section>`;
 }
 function studentDashboard() {
@@ -1692,63 +1697,6 @@ function studentDashboard() {
       </article>
     </div>`;
 }
-function workflowSteps(direction) {
-  if (direction === 'ENTRANTE')
-    return [
-      ['NOMINADO_ORIGEN', 'Nominado por universidad de origen'],
-      ['EN_EDICION', 'En edición por estudiante'],
-      ['POSTULADO', 'Postulado'],
-      ['VALIDADO_ORIGEN', 'Validado por universidad de origen'],
-      ['EN_REVISION_OCRI', 'En revisión OCRI y unidad académica'],
-      ['ACEPTADO', 'Aceptado por UNSAAC'],
-      ['EN_MOVILIDAD', 'En movilidad'],
-      ['CONCLUIDO', 'Concluido'],
-    ];
-  return [
-    ['BORRADOR', 'Borrador'],
-    ['POSTULADO', 'Postulado'],
-    ['EN_REVISION_OCRI', 'En revisión OCRI'],
-    ['NOMINADO_UNSAAC', 'Nominado por UNSAAC'],
-    ['EN_EVALUACION_DESTINO', 'En evaluación por universidad destino'],
-    ['ACEPTADO', 'Aceptado por universidad destino'],
-    ['EN_MOVILIDAD', 'En movilidad'],
-    ['CONCLUIDO', 'Concluido'],
-  ];
-}
-function workflowPosition(application) {
-  const status = application?.status || '';
-  const aliases = {
-    ENVIADA: 'POSTULADO',
-    OBSERVADA: 'EN_REVISION_OCRI',
-    APROBADA_OCRI: 'EN_REVISION_OCRI',
-    FINALIZADA: 'CONCLUIDO',
-    EN_REVISION_DOCUMENTAL: 'EN_REVISION_OCRI',
-    APROBADO_OCRI: 'EN_REVISION_OCRI',
-    OBSERVADO: 'EN_REVISION_OCRI',
-    BORRADOR: application?.direction === 'ENTRANTE' ? 'EN_EDICION' : 'BORRADOR',
-    NOMINADO: application?.direction === 'ENTRANTE' ? 'NOMINADO_ORIGEN' : 'NOMINADO_UNSAAC',
-    FINALIZADO: 'CONCLUIDO',
-  };
-  const normalized = aliases[status] || status;
-  return workflowSteps(application?.direction).findIndex(([key]) => key === normalized);
-}
-function workflowStrip(application) {
-  const steps = workflowSteps(application.direction);
-  const current = workflowPosition(application);
-  return html`<ol class="role-workflow" aria-label="Flujo de la postulación">
-    ${steps
-      .map(
-        ([, label], index) =>
-          html`<li
-            class="${index < current ? 'is-done' : ''} ${index === current ? 'is-current' : ''}"
-          >
-            <span>${String(index + 1).padStart(2, '0')}</span>
-            <strong>${label}</strong>
-          </li>`,
-      )
-      .join('')}
-  </ol>`;
-}
 function externalStudentDashboard() {
   const applications = getMobilityApplications('ENTRANTE');
   const application = applications.find((item) => !isClosedApplication(item)) || null;
@@ -1764,38 +1712,28 @@ function externalStudentDashboard() {
     ${
       application
         ? html`<article class="student-active-card inbound-active-card">
-              <div class="student-active-main">
-                <div class="eyebrow">Tu postulación activa</div>
-                <div class="student-active-heading">
-                  <div>
-                    <h2>${esc(application.callTitle)}</h2>
-                    <p>${badge(application.status)}</p>
-                  </div>
-                  <strong>${application.progress}%</strong>
+            <div class="student-active-main">
+              <div class="eyebrow">Tu postulación activa</div>
+              <div class="student-active-heading">
+                <div>
+                  <h2>${esc(application.callTitle)}</h2>
+                  <p>${badge(application.status)}</p>
                 </div>
-                <div class="progress"><span style="width:${application.progress}%"></span></div>
+                <strong>${application.progress}%</strong>
               </div>
-              <div class="student-next-step">
-                <span>Siguiente paso</span>
-                <p>
-                  Completa los datos y documentos solicitados. Tu universidad validará el expediente
-                  antes de enviarlo a la UNSAAC.
-                </p>
-                <button
-                  class="btn btn-primary"
-                  onclick="openStudentApplication('${application.id}')"
-                >
-                  Ver mi postulación
-                </button>
-              </div>
-            </article>
-            <section class="card workflow-card">
-              <div class="section-title">
-                <h3>Tu ruta de ingreso</h3>
-                ${badge(application.status)}
-              </div>
-              ${workflowStrip(application)}
-            </section>`
+              <div class="progress"><span style="width:${application.progress}%"></span></div>
+            </div>
+            <div class="student-next-step">
+              <span>Siguiente paso</span>
+              <p>
+                Completa los datos y documentos solicitados. Tu universidad validará el expediente
+                antes de enviarlo a la UNSAAC.
+              </p>
+              <button class="btn btn-primary" onclick="openStudentApplication('${application.id}')">
+                Ver mi postulación
+              </button>
+            </div>
+          </article> `
         : html`<article class="student-empty-journey nomination-gate">
             <div>
               <div class="eyebrow">Paso previo obligatorio</div>
@@ -2289,6 +2227,7 @@ function appTable(apps) {
           <th>Estudiante</th>
           <th>Facultad</th>
           <th>Universidad</th>
+          <th>Convocatoria</th>
           <th>Estado</th>
           <th>Avance</th>
           <th></th>
@@ -2328,18 +2267,34 @@ function applicationDetail(a) {
     <div class="card">
       <h3>Documentos del expediente</h3>
       <div class="doc-list">
-        ${a.documents
-          .map(
-            (d) =>
-              html`<div class="doc-item">
-                <div class="doc-icon">PDF</div>
-                <div class="doc-main">
-                  <strong>${esc(d.name)}</strong><small>Documento requerido</small>
-                </div>
-                ${badge(d.status)}
-              </div>`,
-          )
-          .join('')}
+        ${
+          a.documents.length
+            ? a.documents
+                .map(
+                  (d) =>
+                    html`<div class="doc-item application-document-item">
+                      <div class="doc-icon">PDF</div>
+                      <div class="doc-main">
+                        <strong>${esc(d.name)}</strong
+                        ><small>${d.fileName ? esc(d.fileName) : 'Aún no cargado'}</small>
+                      </div>
+                      ${badge(d.status)}
+                      ${
+                        d.storagePath
+                          ? html`<button
+                              class="btn btn-sm btn-soft"
+                              type="button"
+                              onclick="viewApplicationDocument('${a.id}', '${d.id}')"
+                            >
+                              Ver archivo
+                            </button>`
+                          : ''
+                      }
+                    </div>`,
+                )
+                .join('')
+            : '<p class="muted">Este expediente aún no tiene documentos configurados.</p>'
+        }
       </div>
     </div>
     <div class="card">
@@ -2361,6 +2316,21 @@ function applicationDetail(a) {
     </div>
   </div>`;
 }
+async function viewApplicationDocument(applicationId, documentId) {
+  const document = state.applications
+    .find((application) => application.id === applicationId)
+    ?.documents.find((item) => item.id === documentId);
+  if (!document?.storagePath) return toast('El documento todavía no fue cargado.');
+
+  const { data, error } = await supabase.storage
+    .from('application-documents')
+    .download(document.storagePath);
+  if (error) return toast(`No se pudo abrir el documento: ${error.message}`);
+
+  const url = URL.createObjectURL(data);
+  window.open(url, '_blank', 'noopener,noreferrer');
+  setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
+}
 function callCard(c) {
   const cover = c.coverImage ? ` style="background-image:url('${esc(c.coverImage)}')"` : '';
   const titleSize = c.title.length > 58 ? 'is-extra-long' : c.title.length > 28 ? 'is-long' : '';
@@ -2374,9 +2344,7 @@ function callCard(c) {
     onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showCallSummary('${c.id}')}"
   >
     <div class="call-cover${c.coverImage ? ' has-image' : ''}" ${cover}>
-      <div class="call-flags">
-        ${badge(c.status)}<span class="badge neutral">${c.direction}</span>
-      </div>
+      <div class="call-flags">${badge(c.status)}${badge(c.direction)}</div>
       <span class="call-open-hint">Abrir convocatoria ↗</span>
     </div>
     <div class="call-body">
@@ -2408,6 +2376,7 @@ function nomTable(nominations = state.nominations) {
                 <td><strong>${n.id}</strong></td>
                 <td>${esc(n.student)}</td>
                 <td>${esc(n.university)}</td>
+                <td>${esc(n.callTitle || 'Convocatoria no registrada')}</td>
                 <td>${esc(n.country)}</td>
                 <td>${esc(n.email)}</td>
                 <td>${badge(n.status)}</td>
@@ -3332,29 +3301,51 @@ function detailModal(id) {
       </div>
       ${applicationDetail(a)}${acceptanceLetterSection(a)}${
         session.role === 'admin'
-          ? html`<div class="modal-actions">
-              <div class="status-change-control">
-                <select id="appStatus" class="input" onchange="updateStatusExplanation(this.value)">
-                  ${applicationStatusOptions(a)}
-                </select>
-                <small id="statusExplanation">${esc(statusDescription(a.status))}</small>
-              </div>
-              <button class="btn btn-primary" onclick="changeAppStatus('${a.id}')">
-                Guardar estado
-              </button>
-            </div>`
+          ? a.status === 'FINALIZADA' || a.status === 'CONCLUIDO' || a.status === 'FINALIZADO'
+            ? html`<section class="application-concluded-note">
+                <strong>Expediente concluido</strong>
+                <span>Este es el único estado de cierre definitivo del flujo.</span>
+              </section>`
+            : html`<section class="admin-status-panel">
+                <div class="admin-status-panel-head">
+                  <div>
+                    <span class="eyebrow">Gestión OCRI</span>
+                    <h3>Actualizar estado</h3>
+                  </div>
+                  ${adminStatusFlow()}
+                </div>
+                <div class="modal-actions">
+                  <div class="status-change-control">
+                    <select
+                      id="appStatus"
+                      class="input"
+                      onchange="updateStatusExplanation(this.value)"
+                    >
+                      ${applicationStatusOptions(a)}
+                    </select>
+                    <small id="statusExplanation">${esc(statusDescription(a.status))}</small>
+                  </div>
+                  <button class="btn btn-primary" onclick="changeAppStatus('${a.id}')">
+                    Guardar estado
+                  </button>
+                </div>
+              </section>`
           : ''
       }`,
+    'application-detail-dialog',
   );
 }
 function applicationStatusOptions(application) {
   const routes = {
-    ENVIADA: ['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'APROBADA_OCRI', 'RECHAZADA'],
-    EN_REVISION_DOCUMENTAL: ['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'APROBADA_OCRI', 'RECHAZADA'],
-    OBSERVADA: ['EN_REVISION_DOCUMENTAL', 'APROBADA_OCRI', 'RECHAZADA'],
+    BORRADOR: ['BORRADOR', 'ENVIADA'],
+    ENVIADA: ['ENVIADA', 'EN_REVISION_DOCUMENTAL'],
+    EN_REVISION_DOCUMENTAL: ['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'RECHAZADA', 'APROBADA_OCRI'],
+    OBSERVADA: ['OBSERVADA', 'EN_REVISION_DOCUMENTAL'],
+    RECHAZADA: ['RECHAZADA', 'EN_REVISION_DOCUMENTAL'],
     APROBADA_OCRI: ['APROBADA_OCRI', 'CANCELADO'],
     NOMINADO_UNSAAC: ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO', 'CANCELADO'],
     EN_EVALUACION_DESTINO: ['EN_EVALUACION_DESTINO', 'NO_ACEPTADO_DESTINO', 'CANCELADO'],
+    NO_ACEPTADO_DESTINO: ['NO_ACEPTADO_DESTINO', 'EN_EVALUACION_DESTINO'],
     ACEPTADO: ['ACEPTADO', 'EN_MOVILIDAD', 'CANCELADO'],
     EN_MOVILIDAD: ['EN_MOVILIDAD', 'FINALIZADA', 'CANCELADO'],
     CANCELADO: [
@@ -3363,6 +3354,7 @@ function applicationStatusOptions(application) {
       'NOMINADO_UNSAAC',
       'EN_EVALUACION_DESTINO',
       'ACEPTADO',
+      'EN_MOVILIDAD',
     ],
   };
   const allowed = routes[application.status] || [application.status];
@@ -3374,6 +3366,33 @@ function applicationStatusOptions(application) {
         </option>`,
     )
     .join('');
+}
+function adminStatusFlow() {
+  return html`<details class="admin-status-flow">
+    <summary>Ver flujo del expediente</summary>
+    <div class="admin-status-flow-content">
+      <div class="admin-status-flow-line" aria-label="Flujo principal de estados">
+        <span>Borrador</span><i>↓</i><span>Postulado</span><i>↓</i><span>En revisión OCRI</span
+        ><i>↓</i> <span>Aprobado por OCRI</span><i>↓</i><span>Nominado por UNSAAC</span><i>↓</i>
+        <span>En evaluación por destino</span><i>↓</i><span>Carta pendiente</span><i>↓</i>
+        <span>Aceptado</span><i>↓</i><span>En movilidad</span><i>↓</i
+        ><span class="is-final">Concluido</span>
+      </div>
+      <div class="admin-status-flow-branches">
+        <p>
+          <strong>Subsanación pendiente</strong> vuelve a revisión cuando el estudiante corrige.
+        </p>
+        <p>
+          <strong>Rechazado</strong>, <strong>Cancelado</strong> y
+          <strong>No aceptado por destino</strong> son recuperables por OCRI.
+        </p>
+        <p>
+          <strong>Carta pendiente:</strong> el estudiante carga el PDF y OCRI lo valida antes de
+          marcar “Aceptado”.
+        </p>
+      </div>
+    </div>
+  </details>`;
 }
 function statusDescription(status) {
   return (
@@ -3450,12 +3469,32 @@ function saveReview(id, i) {
 }
 function nominationModal() {
   if (session.role !== 'external_manager') return;
+  const inboundCalls = state.calls.filter(
+    (call) => call.direction === 'ENTRANTE' && call.status === 'ACTIVA',
+  );
+  if (!inboundCalls.length)
+    return toast('No hay convocatorias SGME activas para registrar una nominación.');
   modal(
     html`<div class="modal-head">
         <h2>Registrar nominación</h2>
         <button class="modal-close" onclick="closeModal()">×</button>
       </div>
       <form class="form-grid" onsubmit="createNomination(event)">
+        <div class="field wide">
+          <label>Convocatoria SGME</label>
+          <select class="input" name="callId" required>
+            <option value="" selected disabled>Selecciona una convocatoria</option>
+            ${inboundCalls
+              .map(
+                (call) =>
+                  html`<option value="${call.id}">
+                    ${esc(call.title)} · ${esc(call.period)}
+                  </option>`,
+              )
+              .join('')}
+          </select>
+          <small class="field-help">La nominación quedará asociada a esta convocatoria.</small>
+        </div>
         <div class="field wide">
           <label>Estudiante</label><input class="input" name="student" required />
         </div>
@@ -3489,9 +3528,15 @@ function createNomination(e) {
     if (!session.university) return toast('Tu cuenta necesita una universidad asignada.');
     f.university = session.university;
   }
+  const call = state.calls.find(
+    (item) => item.id === f.callId && item.direction === 'ENTRANTE' && item.status === 'ACTIVA',
+  );
+  if (!call) return toast('Selecciona una convocatoria SGME activa.');
   state.nominations.unshift({
     id: `NOM-${String(state.nominations.length + 35).padStart(3, '0')}`,
     ...f,
+    callTitle: call.title,
+    period: call.period,
     status: 'BORRADOR',
   });
   save();
@@ -4011,6 +4056,7 @@ Object.assign(window, {
   openOperationalQueue,
   filterOperationalQueue,
   detailModal,
+  viewApplicationDocument,
   uploadAcceptanceLetter,
   downloadAcceptanceLetter,
   reviewAcceptanceLetter,
