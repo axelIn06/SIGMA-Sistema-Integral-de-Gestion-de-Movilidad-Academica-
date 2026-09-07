@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { tsParticles } from '@tsparticles/engine';
 import { loadSlim } from '@tsparticles/slim';
 import unsaacShieldUrl from './assets/unsaac-escudo.png';
-import loginBackgroundUrl from './assets/fondo-inicio-sesion.jpg';
+import loginBackgroundUrl from './assets/Fondo_PantallaLogIn.jpg';
 import unsaacCampusUrl from './assets/unsaac-ciudad-universitaria.webp';
 import sigmaAirplaneUrl from './assets/sigma-airplane.svg';
 
@@ -47,6 +47,13 @@ const ROLE_VIEWS = {
   ESTUDIANTE_EXTERNO: 'external',
 };
 const STATUS_LABELS = {
+  ACTIVA: 'Activa',
+  SALIENTE: 'Saliente',
+  ENTRANTE: 'Entrante',
+  PENDIENTE: 'Pendiente',
+  SUBIDO: 'Subido',
+  APROBADO: 'Aprobado',
+  RECHAZADO: 'Rechazado',
   ENVIADA: 'Postulado',
   OBSERVADA: 'Subsanación pendiente',
   APROBADA_OCRI: 'Aprobado por OCRI',
@@ -70,6 +77,29 @@ const STATUS_LABELS = {
   FINALIZADO: 'Concluido',
   CANCELADO: 'Cancelado',
   INVITACION_ENVIADA: 'Invitación enviada',
+};
+const STATUS_DESCRIPTIONS = {
+  BORRADOR: 'La postulación existe, pero todavía no fue enviada a OCRI.',
+  ENVIADA: 'El estudiante envió su expediente y OCRI puede iniciar la revisión.',
+  EN_REVISION_DOCUMENTAL: 'OCRI revisa los datos y documentos del expediente.',
+  OBSERVADA: 'OCRI solicitó corregir o completar información antes de continuar.',
+  APROBADA_OCRI: 'OCRI aprobó el expediente; queda listo para registrar la nominación.',
+  NOMINADO_UNSAAC: 'UNSAAC comunicó formalmente la nominación a la universidad de destino.',
+  EN_EVALUACION_DESTINO: 'La universidad de destino evalúa la postulación y sus requisitos.',
+  NO_ACEPTADO_DESTINO: 'La universidad de destino no aceptó la postulación.',
+  ACEPTADO: 'La carta de aceptación fue validada y el estudiante puede continuar el trámite.',
+  EN_MOVILIDAD: 'El periodo de movilidad académica ya está en curso.',
+  FINALIZADA: 'La movilidad académica concluyó.',
+  RECHAZADA: 'OCRI determinó que el expediente no continúa en este proceso.',
+  CANCELADO: 'El proceso se detuvo. OCRI puede restaurarlo a la etapa correcta si fue un error.',
+  INVITACION_ENVIADA:
+    'La universidad de origen recibió la invitación para que el estudiante complete el proceso.',
+  PENDIENTE: 'Aún falta una acción o una revisión.',
+  SUBIDO: 'El archivo fue cargado y espera revisión.',
+  APROBADO: 'El documento fue revisado favorablemente.',
+  RECHAZADO: 'El documento no cumple con lo solicitado.',
+  SALIENTE: 'Movilidad de estudiantes UNSAAC hacia otra universidad.',
+  ENTRANTE: 'Movilidad de estudiantes externos hacia la UNSAAC.',
 };
 let state = load();
 let session = null;
@@ -309,6 +339,7 @@ function toast(msg) {
 }
 function badge(status) {
   const s = STATUS_LABELS[status] || status.replaceAll('_', ' ');
+  const description = STATUS_DESCRIPTIONS[status] || `Estado actual: ${s}.`;
   const cls = /APROBAD|ACTIVA|COMPLETO|CONFIRMADO/.test(status)
     ? 'ok'
     : /OBSERVAD|RECHAZAD/.test(status)
@@ -318,7 +349,13 @@ function badge(status) {
         : /PENDIENTE|BORRADOR|INVITACION/.test(status)
           ? 'warn'
           : 'neutral';
-  return html`<span class="badge ${cls}">${esc(s)}</span>`;
+  return html`<span
+    class="badge ${cls}"
+    title="${esc(description)}"
+    data-tooltip="${esc(description)}"
+    aria-label="${esc(`${s}. ${description}`)}"
+    >${esc(s)}</span
+  >`;
 }
 
 function stopLoginAnimation() {
@@ -3296,9 +3333,12 @@ function detailModal(id) {
       ${applicationDetail(a)}${acceptanceLetterSection(a)}${
         session.role === 'admin'
           ? html`<div class="modal-actions">
-              <select id="appStatus" class="input">
-                ${applicationStatusOptions(a)}
-              </select>
+              <div class="status-change-control">
+                <select id="appStatus" class="input" onchange="updateStatusExplanation(this.value)">
+                  ${applicationStatusOptions(a)}
+                </select>
+                <small id="statusExplanation">${esc(statusDescription(a.status))}</small>
+              </div>
               <button class="btn btn-primary" onclick="changeAppStatus('${a.id}')">
                 Guardar estado
               </button>
@@ -3334,6 +3374,16 @@ function applicationStatusOptions(application) {
         </option>`,
     )
     .join('');
+}
+function statusDescription(status) {
+  return (
+    STATUS_DESCRIPTIONS[status] ||
+    `Estado actual: ${STATUS_LABELS[status] || status.replaceAll('_', ' ')}.`
+  );
+}
+function updateStatusExplanation(status) {
+  const explanation = $('#statusExplanation');
+  if (explanation) explanation.textContent = statusDescription(status);
 }
 async function changeAppStatus(id) {
   if (session.role !== 'admin') return;
@@ -3966,6 +4016,7 @@ Object.assign(window, {
   reviewAcceptanceLetter,
   nominateApplication,
   changeAppStatus,
+  updateStatusExplanation,
   reviewModal,
   saveReview,
   saveProfile,
