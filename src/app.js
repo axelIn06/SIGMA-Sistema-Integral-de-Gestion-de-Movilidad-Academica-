@@ -67,6 +67,7 @@ const STATUS_LABELS = {
   NOMINADO: 'Nominado',
   NOMINADO_UNSAAC: 'Nominado por UNSAAC',
   EN_EVALUACION_DESTINO: 'En evaluación por destino',
+  CARTA_PENDIENTE: 'Carta pendiente',
   VALIDADO_ORIGEN: 'Validado por universidad de origen',
   ACEPTADO: 'Aceptado',
   NO_ADMITIDO_UNSAAC: 'No admitido por UNSAAC',
@@ -88,6 +89,8 @@ const STATUS_DESCRIPTIONS = {
   APROBADA_OCRI: 'OCRI aprobó el expediente; queda listo para registrar la nominación.',
   NOMINADO_UNSAAC: 'UNSAAC comunicó formalmente la nominación a la universidad de destino.',
   EN_EVALUACION_DESTINO: 'La universidad de destino evalúa la postulación y sus requisitos.',
+  CARTA_PENDIENTE:
+    'La universidad de destino emitirá la carta; el estudiante debe cargar el PDF para que OCRI lo valide.',
   NO_ACEPTADO_DESTINO:
     'La universidad de destino no aceptó la postulación. OCRI puede reabrir la evaluación si corresponde.',
   ACEPTADO: 'La carta de aceptación fue validada y el estudiante puede continuar el trámite.',
@@ -161,6 +164,13 @@ const esc = (s) =>
 const shortDate = (value) => {
   const [year, month, day] = String(value || '').split('-');
   return year && month && day ? `${day}/${month}/${year.slice(-2)}` : 'Por definir';
+};
+const fullDateTime = (value) => {
+  if (!value) return 'Sin fecha registrada';
+  return new Intl.DateTimeFormat('es-PE', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
 };
 
 const isUuid = (value) =>
@@ -239,7 +249,7 @@ async function loadApplicationsFromDatabase() {
   const { data, error } = await supabase
     .from('applications')
     .select(
-      'id,call_id,applicant_id,status,student_code,faculty,academic_program,submitted_at,created_at,calls(title,direction,period),profiles!applications_applicant_id_fkey(full_name,email),application_documents(id,requirement_id,requirement_title,is_required,storage_path,file_name,status,reviewer_comment)',
+      'id,call_id,applicant_id,status,student_code,faculty,academic_program,submitted_at,created_at,calls(title,direction,period),profiles!applications_applicant_id_fkey(full_name,email,photo_path,phone,address,universities(name)),application_documents(id,requirement_id,requirement_title,is_required,storage_path,file_name,status,reviewer_comment),application_status_history(status,changed_at,profiles!application_status_history_changed_by_fkey(full_name))',
     )
     .order('updated_at', { ascending: false });
 
@@ -250,6 +260,17 @@ async function loadApplicationsFromDatabase() {
   }
 
   const { data: letters } = await supabase.from('acceptance_letters').select('*');
+  const profilePhotos = await Promise.all(
+    data.map(async (application) => {
+      const path = application.profiles?.photo_path;
+      if (!path) return [application.id, ''];
+      const { data: signed } = await supabase.storage
+        .from('profile-photos')
+        .createSignedUrl(path, 60 * 30);
+      return [application.id, signed?.signedUrl || ''];
+    }),
+  );
+  const photoByApplication = new Map(profilePhotos);
   state.applications = data.map((application) => {
     const documents = application.application_documents || [];
     const completedDocuments = documents.filter((document) => document.storage_path).length;
@@ -268,6 +289,13 @@ async function loadApplicationsFromDatabase() {
       displayId: `${application.calls?.direction === 'ENTRANTE' ? 'SGME' : 'SGMS'}-${application.id.slice(0, 6).toUpperCase()}`,
       callId: application.call_id,
       applicantId: application.applicant_id,
+      applicant: {
+        email: application.profiles?.email || '',
+        phone: application.profiles?.phone || '',
+        address: application.profiles?.address || '',
+        university: application.profiles?.universities?.name || '',
+        photoUrl: photoByApplication.get(application.id) || '',
+      },
       direction: application.calls?.direction || 'SALIENTE',
       student: application.profiles?.full_name || application.profiles?.email || 'Estudiante',
       code: application.student_code || 'Pendiente',
@@ -288,12 +316,14 @@ async function loadApplicationsFromDatabase() {
         status: document.status,
         reviewerComment: document.reviewer_comment || '',
       })),
-      history: [
-        [
-          application.status.replaceAll('_', ' '),
-          date ? new Date(date).toLocaleDateString('es-PE') : 'Sin fecha',
-        ],
-      ],
+      history: (application.application_status_history || [])
+        .slice()
+        .sort((left, right) => new Date(left.changed_at) - new Date(right.changed_at))
+        .map((entry) => ({
+          status: entry.status,
+          changedAt: entry.changed_at,
+          changedBy: entry.profiles?.full_name || 'Sistema SIGMA',
+        })),
     };
   });
 }
@@ -344,11 +374,11 @@ function toast(msg) {
 function badge(status) {
   const s = STATUS_LABELS[status] || status.replaceAll('_', ' ');
   const description = STATUS_DESCRIPTIONS[status] || `Estado actual: ${s}.`;
-  const cls = /APROBAD|ACTIVA|COMPLETO|CONFIRMADO/.test(status)
+  const cls = /APROBAD|ACEPTAD|ACTIVA|COMPLETO|CONFIRMADO|CONCLUID|FINALIZAD/.test(status)
     ? 'ok'
-    : /OBSERVAD|RECHAZAD/.test(status)
+    : /OBSERVAD|RECHAZAD|NO_ACEPTADO|CANCELADO/.test(status)
       ? 'bad'
-      : /REVISION|VALIDACION|ENVIADA|SUBIDO/.test(status)
+      : /REVISION|VALIDACION|ENVIADA|SUBIDO|NOMINADO|EVALUACION|MOVILIDAD/.test(status)
         ? 'info'
         : /PENDIENTE|BORRADOR|INVITACION/.test(status)
           ? 'warn'
@@ -360,6 +390,40 @@ function badge(status) {
     tabindex="0"
     >${esc(s)}</span
   >`;
+}
+
+function applicationHistory(application) {
+  if (application.history?.length) return application.history;
+  return [
+    {
+      status: application.status,
+      changedAt: null,
+      changedBy: 'Sistema SIGMA',
+    },
+  ];
+}
+
+function applicationHistoryTimeline(application) {
+  return html`<div class="timeline status-history-timeline">
+    ${applicationHistory(application)
+      .map(
+        (entry, index) =>
+          html`<div
+            class="timeline-item ${index === applicationHistory(application).length - 1 ? 'is-current' : ''}"
+          >
+            <div class="timeline-dot"></div>
+            <div>
+              <div class="timeline-status-line">
+                ${badge(entry.status)}<strong
+                  >${esc(STATUS_LABELS[entry.status] || entry.status.replaceAll('_', ' '))}</strong
+                >
+              </div>
+              <p>${esc(fullDateTime(entry.changedAt))} · ${esc(entry.changedBy)}</p>
+            </div>
+          </div>`,
+      )
+      .join('')}
+  </div>`;
 }
 
 function stopLoginAnimation() {
@@ -1601,23 +1665,11 @@ function studentApplicationDetailView(application) {
         <div class="student-detail-heading">
           <div>
             <span>02</span>
-            <h2>Estado y novedades</h2>
+            <h2>Historial de estados</h2>
           </div>
         </div>
-        <div class="timeline">
-          ${application.history
-            .map(
-              (entry) =>
-                html`<div class="timeline-item">
-                  <div class="timeline-dot"></div>
-                  <div>
-                    <strong>${esc(entry[0])}</strong>
-                    <p>${esc(entry[1])}</p>
-                  </div>
-                </div>`,
-            )
-            .join('')}
-        </div>
+        <p class="muted">Cada avance de tu expediente queda registrado aquí.</p>
+        ${applicationHistoryTimeline(application)}
       </section>`;
 }
 function studentDashboard() {
@@ -1829,7 +1881,8 @@ function operationalTable(apps) {
     <table class="table">
       <thead>
         <tr>
-          <th>Estudiante / expediente</th>
+          <th>Postulante / expediente</th>
+          <th>Trayectoria académica</th>
           <th>Flujo y convocatoria</th>
           <th>Estado</th>
           <th>Fecha de registro o envío</th>
@@ -1843,6 +1896,10 @@ function operationalTable(apps) {
               html`<tr>
                 <td>
                   <strong>${esc(a.student)}</strong><br /><small>${esc(a.displayId || a.id)}</small>
+                </td>
+                <td>
+                  <strong>${esc(a.academicProgram || 'Carrera por registrar')}</strong><br />
+                  <small>${esc(a.faculty || 'Facultad por registrar')}</small>
                 </td>
                 <td>
                   <span class="badge neutral"
@@ -1939,7 +1996,8 @@ function filterOperationalQueue() {
       (!filters.letter ||
         (filters.letter === 'review'
           ? a.letter?.status === 'PENDIENTE'
-          : !a.letter && ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO'].includes(a.status))) &&
+          : !a.letter &&
+            ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO', 'CARTA_PENDIENTE'].includes(a.status))) &&
       `${a.student} ${a.callTitle} ${a.displayId}`
         .toLowerCase()
         .includes(filters.search.trim().toLowerCase())
@@ -1955,6 +2013,9 @@ function managerNominations() {
 }
 function managerOverview() {
   const nominations = managerNominations();
+  const applications = state.applications.filter(
+    (application) => application.direction === 'ENTRANTE',
+  );
   $('#view').innerHTML =
     head('Resumen de movilidad entrante', esc(session.university || 'Universidad asociada')) +
     html` <div class="operational-metrics">
@@ -1969,6 +2030,15 @@ function managerOverview() {
         <p>Nominar → estudiante completa → universidad valida → UNSAAC evalúa → resultado.</p>
         <button class="btn btn-primary" onclick="go('nominations')">Gestionar nominaciones</button>
         <button class="btn btn-soft" onclick="go('calls')">Consultar convocatorias</button>
+      </section>
+      <section class="card operational-section">
+        <div class="section-title">
+          <div>
+            <h3>Expedientes de mi universidad</h3>
+            <p class="muted">Consulta el perfil, documentos e historial de cada postulante.</p>
+          </div>
+        </div>
+        ${operationalTable(applications)}
       </section>
       <section class="card operational-section">
         <h3>Últimas nominaciones</h3>
@@ -2224,10 +2294,9 @@ function appTable(apps) {
       <thead>
         <tr>
           <th>Expediente</th>
-          <th>Estudiante</th>
-          <th>Facultad</th>
-          <th>Universidad</th>
-          <th>Convocatoria</th>
+          <th>Postulante</th>
+          <th>Trayectoria académica</th>
+          <th>Flujo y convocatoria</th>
           <th>Estado</th>
           <th>Avance</th>
           <th></th>
@@ -2243,9 +2312,18 @@ function appTable(apps) {
                     >${a.submitted}</small
                   >
                 </td>
-                <td>${esc(a.student)}<br /><small class="muted">${a.code}</small></td>
-                <td>${esc(a.faculty)}</td>
-                <td>${esc(a.destination)}</td>
+                <td>${esc(a.student)}<br /><small class="muted">Código: ${a.code}</small></td>
+                <td>
+                  <strong>${esc(a.academicProgram || 'Carrera por registrar')}</strong><br /><small
+                    class="muted"
+                    >${esc(a.faculty || 'Facultad por registrar')}</small
+                  >
+                </td>
+                <td>
+                  <span class="flow-chip ${a.direction === 'SALIENTE' ? 'outgoing' : 'incoming'}"
+                    >${a.direction === 'SALIENTE' ? 'SGMS · Saliente' : 'SGME · Entrante'}</span
+                  ><br /><small class="muted">${esc(a.destination)}</small>
+                </td>
                 <td>${badge(a.status)}</td>
                 <td>
                   <div class="progress" style="width:75px">
@@ -2263,58 +2341,126 @@ function appTable(apps) {
   </div>`;
 }
 function applicationDetail(a) {
-  return html`<div class="grid-2">
-    <div class="card">
-      <h3>Documentos del expediente</h3>
-      <div class="doc-list">
+  return html`<section class="applicant-profile-card">
+      <div class="applicant-profile-avatar">
         ${
-          a.documents.length
-            ? a.documents
-                .map(
-                  (d) =>
-                    html`<div class="doc-item application-document-item">
-                      <div class="doc-icon">PDF</div>
-                      <div class="doc-main">
-                        <strong>${esc(d.name)}</strong
-                        ><small>${d.fileName ? esc(d.fileName) : 'Aún no cargado'}</small>
-                      </div>
-                      ${badge(d.status)}
-                      ${
-                        d.storagePath
-                          ? html`<button
-                              class="btn btn-sm btn-soft"
-                              type="button"
-                              onclick="viewApplicationDocument('${a.id}', '${d.id}')"
-                            >
-                              Ver archivo
-                            </button>`
-                          : ''
-                      }
-                    </div>`,
-                )
-                .join('')
-            : '<p class="muted">Este expediente aún no tiene documentos configurados.</p>'
+          a.applicant?.photoUrl
+            ? `<img src="${esc(a.applicant.photoUrl)}" alt="Foto de ${esc(a.student)}" />`
+            : `<span>${esc(
+                a.student
+                  .split(/\s+/)
+                  .slice(0, 2)
+                  .map((name) => name[0])
+                  .join('')
+                  .toUpperCase(),
+              )}</span>`
         }
       </div>
-    </div>
-    <div class="card">
-      <h3>Seguimiento</h3>
-      <div class="timeline">
-        ${a.history
-          .map(
-            (h) =>
-              html`<div class="timeline-item">
-                <div class="timeline-dot"></div>
-                <div>
-                  <strong>${esc(h[0])}</strong>
-                  <p>${h[1]}</p>
-                </div>
-              </div>`,
-          )
-          .join('')}
+      <div class="applicant-profile-main">
+        <span class="eyebrow">Perfil del postulante</span>
+        <h3>${esc(a.student)}</h3>
+        <p>${esc(a.applicant?.email || 'Correo no registrado')} · Código ${esc(a.code)}</p>
+        <div class="applicant-profile-meta">
+          <span><strong>Facultad</strong>${esc(a.faculty || 'Por registrar')}</span>
+          <span
+            ><strong>Carrera profesional</strong>${esc(a.academicProgram || 'Por registrar')}</span
+          >
+          <span><strong>Universidad</strong>${esc(a.applicant?.university || 'UNSAAC')}</span>
+        </div>
       </div>
-    </div>
-  </div>`;
+      <button class="btn btn-soft btn-sm" type="button" onclick="applicantProfileModal('${a.id}')">
+        Ver perfil
+      </button>
+    </section>
+    <div class="grid-2">
+      <div class="card">
+        <h3>Documentos del expediente</h3>
+        <div class="doc-list">
+          ${
+            a.documents.length
+              ? a.documents
+                  .map(
+                    (d) =>
+                      html`<div class="doc-item application-document-item">
+                        <div class="doc-icon">PDF</div>
+                        <div class="doc-main">
+                          <strong>${esc(d.name)}</strong
+                          ><small>${d.fileName ? esc(d.fileName) : 'Aún no cargado'}</small>
+                        </div>
+                        ${badge(d.status)}
+                        ${
+                          d.storagePath
+                            ? html`<button
+                                class="btn btn-sm btn-soft"
+                                type="button"
+                                onclick="viewApplicationDocument('${a.id}', '${d.id}')"
+                              >
+                                Ver archivo
+                              </button>`
+                            : ''
+                        }
+                      </div>`,
+                  )
+                  .join('')
+              : '<p class="muted">Este expediente aún no tiene documentos configurados.</p>'
+          }
+        </div>
+      </div>
+      <div class="card">
+        <h3>Historial de estados</h3>
+        <p class="muted">Registro cronológico de cada cambio en el expediente.</p>
+        ${applicationHistoryTimeline(a)}
+      </div>
+    </div>`;
+}
+function applicantProfileModal(id) {
+  const application = state.applications.find((item) => item.id === id);
+  if (!application) return;
+  const applicant = application.applicant || {};
+  closeModal();
+  modal(
+    html`<div class="modal-head">
+        <div>
+          <span class="eyebrow">Perfil del postulante</span>
+          <h2>${esc(application.student)}</h2>
+        </div>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <section class="applicant-profile-full">
+        <div class="applicant-profile-avatar large">
+          ${
+            applicant.photoUrl
+              ? `<img src="${esc(applicant.photoUrl)}" alt="Foto de ${esc(application.student)}" />`
+              : `<span>${esc(
+                  application.student
+                    .split(/\s+/)
+                    .slice(0, 2)
+                    .map((name) => name[0])
+                    .join('')
+                    .toUpperCase(),
+                )}</span>`
+          }
+        </div>
+        <div class="profile-data-grid">
+          <p>
+            <strong>Correo institucional</strong
+            ><span>${esc(applicant.email || 'No registrado')}</span>
+          </p>
+          <p><strong>Código de estudiante</strong><span>${esc(application.code)}</span></p>
+          <p>
+            <strong>Facultad</strong><span>${esc(application.faculty || 'Por registrar')}</span>
+          </p>
+          <p>
+            <strong>Carrera profesional</strong
+            ><span>${esc(application.academicProgram || 'Por registrar')}</span>
+          </p>
+          <p><strong>Universidad</strong><span>${esc(applicant.university || 'UNSAAC')}</span></p>
+          <p><strong>Teléfono</strong><span>${esc(applicant.phone || 'No registrado')}</span></p>
+          <p><strong>Dirección</strong><span>${esc(applicant.address || 'No registrada')}</span></p>
+        </div>
+      </section>`,
+    'applicant-profile-dialog',
+  );
 }
 async function viewApplicationDocument(applicationId, documentId) {
   const document = state.applications
@@ -3197,7 +3343,9 @@ function filterCards(v) {
 function acceptanceLetterSection(a) {
   const admin = session.role === 'admin';
   const isOutgoing = a.direction === 'SALIENTE';
-  const isNominated = ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO'].includes(a.status);
+  const isNominated = ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO', 'CARTA_PENDIENTE'].includes(
+    a.status,
+  );
   const canStudentUpload = isOutgoing && a.applicantId === session.userId && isNominated;
   const canOcriUpload = !isOutgoing && admin && ['APROBADA_OCRI', 'ACEPTADO'].includes(a.status);
   const canValidate = admin && isOutgoing && a.letter?.status === 'PENDIENTE';
@@ -3344,7 +3492,18 @@ function applicationStatusOptions(application) {
     RECHAZADA: ['RECHAZADA', 'EN_REVISION_DOCUMENTAL'],
     APROBADA_OCRI: ['APROBADA_OCRI', 'CANCELADO'],
     NOMINADO_UNSAAC: ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO', 'CANCELADO'],
-    EN_EVALUACION_DESTINO: ['EN_EVALUACION_DESTINO', 'NO_ACEPTADO_DESTINO', 'CANCELADO'],
+    EN_EVALUACION_DESTINO: [
+      'EN_EVALUACION_DESTINO',
+      'NO_ACEPTADO_DESTINO',
+      'CARTA_PENDIENTE',
+      'CANCELADO',
+    ],
+    CARTA_PENDIENTE: [
+      'CARTA_PENDIENTE',
+      'EN_EVALUACION_DESTINO',
+      'NO_ACEPTADO_DESTINO',
+      'CANCELADO',
+    ],
     NO_ACEPTADO_DESTINO: ['NO_ACEPTADO_DESTINO', 'EN_EVALUACION_DESTINO'],
     ACEPTADO: ['ACEPTADO', 'EN_MOVILIDAD', 'CANCELADO'],
     EN_MOVILIDAD: ['EN_MOVILIDAD', 'FINALIZADA', 'CANCELADO'],
@@ -3368,29 +3527,40 @@ function applicationStatusOptions(application) {
     .join('');
 }
 function adminStatusFlow() {
-  return html`<details class="admin-status-flow">
-    <summary>Ver flujo del expediente</summary>
+  return html`<details class="admin-status-flow" open>
+    <summary>Guía del flujo y sus decisiones</summary>
     <div class="admin-status-flow-content">
-      <div class="admin-status-flow-line" aria-label="Flujo principal de estados">
-        <span>Borrador</span><i>↓</i><span>Postulado</span><i>↓</i><span>En revisión OCRI</span
-        ><i>↓</i> <span>Aprobado por OCRI</span><i>↓</i><span>Nominado por UNSAAC</span><i>↓</i>
-        <span>En evaluación por destino</span><i>↓</i><span>Carta pendiente</span><i>↓</i>
-        <span>Aceptado</span><i>↓</i><span>En movilidad</span><i>↓</i
-        ><span class="is-final">Concluido</span>
-      </div>
-      <div class="admin-status-flow-branches">
-        <p>
-          <strong>Subsanación pendiente</strong> vuelve a revisión cuando el estudiante corrige.
-        </p>
-        <p>
-          <strong>Rechazado</strong>, <strong>Cancelado</strong> y
-          <strong>No aceptado por destino</strong> son recuperables por OCRI.
-        </p>
-        <p>
-          <strong>Carta pendiente:</strong> el estudiante carga el PDF y OCRI lo valida antes de
-          marcar “Aceptado”.
-        </p>
-      </div>
+      <ol class="status-flow-track" aria-label="Flujo principal de estados">
+        <li><span class="flow-node draft">Borrador</span></li>
+        <li><span class="flow-node submitted">Postulado</span></li>
+        <li class="has-branches">
+          <span class="flow-node review">En revisión OCRI</span>
+          <div class="flow-branches">
+            <span class="flow-branch warning"
+              >Observado <small>el estudiante corrige y vuelve a revisión</small></span
+            >
+            <span class="flow-branch stopped">Rechazado</span>
+          </div>
+        </li>
+        <li><span class="flow-node approved">Aprobado por OCRI</span></li>
+        <li><span class="flow-node nomination">Nominado por UNSAAC</span></li>
+        <li class="has-branches">
+          <span class="flow-node review">En evaluación por universidad destino</span>
+          <div class="flow-branches">
+            <span class="flow-branch stopped">No aceptado por destino</span>
+            <span class="flow-branch letter"
+              >Carta pendiente <small>estudiante sube PDF → OCRI valida</small></span
+            >
+          </div>
+        </li>
+        <li><span class="flow-node accepted">Aceptado</span></li>
+        <li><span class="flow-node mobility">En movilidad</span></li>
+        <li><span class="flow-node final">Concluido</span></li>
+      </ol>
+      <p class="status-flow-note">
+        <strong>Cancelado</strong> es una salida excepcional y OCRI puede restaurar el expediente a
+        la etapa que corresponda.
+      </p>
     </div>
   </details>`;
 }
