@@ -92,12 +92,12 @@ const STATUS_DESCRIPTIONS = {
   CARTA_PENDIENTE:
     'La universidad de destino emitirá la carta; el estudiante debe cargar el PDF para que OCRI lo valide.',
   NO_ACEPTADO_DESTINO:
-    'La universidad de destino no aceptó la postulación. OCRI puede reabrir la evaluación si corresponde.',
+    'La universidad de destino no aceptó la postulación. Este resultado es definitivo para la convocatoria.',
   ACEPTADO: 'La carta de aceptación fue validada y el estudiante puede continuar el trámite.',
   EN_MOVILIDAD: 'El periodo de movilidad académica ya está en curso.',
   FINALIZADA: 'La movilidad académica concluyó.',
   RECHAZADA:
-    'OCRI rechazó el expediente. Puede devolverse a revisión si se detecta un error o se presenta una corrección.',
+    'OCRI rechazó el expediente. La postulación queda cerrada y permanece visible en el historial.',
   CANCELADO: 'El proceso se detuvo. OCRI puede restaurarlo a la etapa correcta si fue un error.',
   INVITACION_ENVIADA:
     'La universidad de origen recibió la invitación para que el estudiante complete el proceso.',
@@ -249,7 +249,7 @@ async function loadApplicationsFromDatabase() {
   const { data, error } = await supabase
     .from('applications')
     .select(
-      'id,call_id,applicant_id,status,student_code,faculty,academic_program,submitted_at,created_at,calls(title,direction,period),profiles!applications_applicant_id_fkey(full_name,email,photo_path,phone,address,universities(name)),application_documents(id,requirement_id,requirement_title,is_required,storage_path,file_name,status,reviewer_comment),application_status_history(status,changed_at,profiles!application_status_history_changed_by_fkey(full_name))',
+      'id,call_id,applicant_id,status,student_code,faculty,academic_program,submitted_at,created_at,calls(title,direction,period),profiles!applications_applicant_id_fkey(full_name,email,photo_path,phone,address,universities(name)),application_documents(id,requirement_id,requirement_title,is_required,storage_path,file_name,status,reviewer_comment)',
     )
     .order('updated_at', { ascending: false });
 
@@ -259,7 +259,24 @@ async function loadApplicationsFromDatabase() {
     return;
   }
 
-  const { data: letters } = await supabase.from('acceptance_letters').select('*');
+  const applicationIds = data.map((application) => application.id);
+  const [{ data: letters }, { data: statusHistory, error: historyError }] = await Promise.all([
+    supabase.from('acceptance_letters').select('*'),
+    applicationIds.length
+      ? supabase
+          .from('application_status_history')
+          .select(
+            'application_id,status,changed_at,profiles!application_status_history_changed_by_fkey(full_name)',
+          )
+          .in('application_id', applicationIds)
+          .order('changed_at', { ascending: true })
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (historyError)
+    console.warn(
+      'Las postulaciones se cargaron, pero su historial aún no está disponible.',
+      historyError.message,
+    );
   const profilePhotos = await Promise.all(
     data.map(async (application) => {
       const path = application.profiles?.photo_path;
@@ -316,9 +333,8 @@ async function loadApplicationsFromDatabase() {
         status: document.status,
         reviewerComment: document.reviewer_comment || '',
       })),
-      history: (application.application_status_history || [])
-        .slice()
-        .sort((left, right) => new Date(left.changed_at) - new Date(right.changed_at))
+      history: (statusHistory || [])
+        .filter((entry) => entry.application_id === application.id)
         .map((entry) => ({
           status: entry.status,
           changedAt: entry.changed_at,
@@ -1484,9 +1500,9 @@ function getMobilityApplications(
   return filteredApps(direction);
 }
 function isClosedApplication(application) {
-  // Solo una movilidad concluida cierra definitivamente el expediente.
-  // Los demás estados pueden necesitar corrección o una reapertura por OCRI.
-  return /FINALIZAD|CONCLUID|FINALIZADO/.test(application.status);
+  // Los resultados negativos y la conclusión cierran esa postulación. El
+  // expediente permanece en el historial, pero no puede reutilizarse.
+  return /RECHAZAD|NO_ACEPTADO|FINALIZAD|CONCLUID/.test(application.status);
 }
 function getActiveStudentApplication() {
   return getStudentApplications().find((application) => !isClosedApplication(application)) || null;
@@ -3216,7 +3232,7 @@ function showCallSummary(id) {
               class="btn btn-primary"
               onclick="openStudentApplication('${application.id}')"
             >
-              Ver mi postulación
+              ${/RECHAZAD|NO_ACEPTADO/.test(application.status) ? 'Ver resultado' : 'Ver mi postulación'}
             </button>`
           : html`<button class="btn btn-primary" onclick="startApplication('${call.id}')">
               ${application ? 'Continuar postulación' : 'Postular'}
@@ -3489,7 +3505,7 @@ function applicationStatusOptions(application) {
     ENVIADA: ['ENVIADA', 'EN_REVISION_DOCUMENTAL'],
     EN_REVISION_DOCUMENTAL: ['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'RECHAZADA', 'APROBADA_OCRI'],
     OBSERVADA: ['OBSERVADA', 'EN_REVISION_DOCUMENTAL'],
-    RECHAZADA: ['RECHAZADA', 'EN_REVISION_DOCUMENTAL'],
+    RECHAZADA: ['RECHAZADA'],
     APROBADA_OCRI: ['APROBADA_OCRI', 'CANCELADO'],
     NOMINADO_UNSAAC: ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO', 'CANCELADO'],
     EN_EVALUACION_DESTINO: [
@@ -3504,7 +3520,7 @@ function applicationStatusOptions(application) {
       'NO_ACEPTADO_DESTINO',
       'CANCELADO',
     ],
-    NO_ACEPTADO_DESTINO: ['NO_ACEPTADO_DESTINO', 'EN_EVALUACION_DESTINO'],
+    NO_ACEPTADO_DESTINO: ['NO_ACEPTADO_DESTINO'],
     ACEPTADO: ['ACEPTADO', 'EN_MOVILIDAD', 'CANCELADO'],
     EN_MOVILIDAD: ['EN_MOVILIDAD', 'FINALIZADA', 'CANCELADO'],
     CANCELADO: [
@@ -3742,7 +3758,14 @@ async function startApplication(callId) {
   const existing = state.applications.find(
     (item) => item.callId === callId && item.applicantId === session.userId,
   );
-  if (existing && existing.status !== 'BORRADOR') return openExistingApplication(existing.id);
+  if (existing && existing.status !== 'BORRADOR') {
+    openExistingApplication(existing.id);
+    if (/RECHAZAD|NO_ACEPTADO/.test(existing.status))
+      toast(
+        'Esta postulación fue rechazada y no puede volver a enviarse. Puedes consultar su historial.',
+      );
+    return;
+  }
 
   if (!academicCatalog.length) {
     await loadAcademicCatalog();
