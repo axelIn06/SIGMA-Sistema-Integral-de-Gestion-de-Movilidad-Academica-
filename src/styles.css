@@ -1592,6 +1592,76 @@ textarea:focus-visible {
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
+.mobility-eligibility {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 15px 17px;
+  margin: -7px 0 18px;
+  border: 1px solid #cfe3d7;
+  border-radius: 14px;
+  background: #f4faf6;
+}
+.mobility-eligibility.has-conflicts {
+  border-color: #e7c4c8;
+  background: #fff5f5;
+}
+.mobility-eligibility > div {
+  display: grid;
+  gap: 5px;
+}
+.mobility-eligibility ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #8c2432;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.applicant-history-list {
+  display: grid;
+  gap: 12px;
+}
+.applicant-history-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface-muted);
+}
+.applicant-history-item.is-current {
+  border-color: rgba(111, 13, 45, 0.35);
+  background: #fbf6f7;
+}
+.applicant-history-item > div {
+  display: grid;
+  gap: 5px;
+  align-content: start;
+}
+.applicant-history-item span,
+.applicant-history-item small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.applicant-history-item > div:last-child {
+  justify-items: end;
+}
+.report-application-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+.report-application-row > span {
+  display: grid;
+  gap: 3px;
+}
+.report-application-row small {
+  color: var(--muted);
+}
 .applicant-profile-full {
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr);
@@ -3807,6 +3877,16 @@ textarea.input {
   .admin-status-panel .modal-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+  .mobility-eligibility {
+    grid-template-columns: 1fr;
+  }
+  .applicant-history-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .applicant-history-item > div:last-child {
+    justify-items: start;
   }
 }
 .sgmee-shell {

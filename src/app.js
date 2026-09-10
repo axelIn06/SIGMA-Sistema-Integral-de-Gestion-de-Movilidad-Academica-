@@ -204,6 +204,8 @@ async function mapDatabaseCall(call) {
     title: call.title,
     direction: call.direction,
     period: call.period,
+    activityType: call.activity_type || 'MOVILIDAD',
+    mobilityScope: call.mobility_scope || '',
     end: call.closes_on,
     status: call.status,
     coverImagePath: call.cover_image_path || '',
@@ -231,7 +233,7 @@ async function loadCallsFromDatabase() {
   const { data, error } = await supabase
     .from('calls')
     .select(
-      'id,code,title,direction,period,closes_on,status,cover_image_path,call_guidelines(content,display_order),call_requirements(id,title,description,is_required,display_order),call_resources(description,file_name,storage_path,display_order),call_notices(call_notice_links(label,url,display_order))',
+      'id,code,title,direction,period,activity_type,mobility_scope,closes_on,status,cover_image_path,call_guidelines(content,display_order),call_requirements(id,title,description,is_required,display_order),call_resources(description,file_name,storage_path,display_order),call_notices(call_notice_links(label,url,display_order))',
     )
     .order('created_at', { ascending: false });
 
@@ -249,7 +251,7 @@ async function loadApplicationsFromDatabase() {
   const { data, error } = await supabase
     .from('applications')
     .select(
-      'id,call_id,applicant_id,status,student_code,faculty,academic_program,submitted_at,created_at,calls(title,direction,period),profiles!applications_applicant_id_fkey(full_name,email,photo_path,phone,address,universities(name)),application_documents(id,requirement_id,requirement_title,is_required,storage_path,file_name,status,reviewer_comment)',
+      'id,call_id,applicant_id,status,student_code,faculty,academic_program,submitted_at,created_at,calls(title,direction,period,activity_type,mobility_scope),profiles!applications_applicant_id_fkey(full_name,email,photo_path,phone,address,universities(name)),application_documents(id,requirement_id,requirement_title,is_required,storage_path,file_name,status,reviewer_comment)',
     )
     .order('updated_at', { ascending: false });
 
@@ -314,6 +316,9 @@ async function loadApplicationsFromDatabase() {
         photoUrl: photoByApplication.get(application.id) || '',
       },
       direction: application.calls?.direction || 'SALIENTE',
+      period: application.calls?.period || '',
+      activityType: application.calls?.activity_type || 'MOVILIDAD',
+      mobilityScope: application.calls?.mobility_scope || '',
       student: application.profiles?.full_name || application.profiles?.email || 'Estudiante',
       code: application.student_code || 'Pendiente',
       faculty: application.faculty || 'Pendiente',
@@ -1377,6 +1382,7 @@ const views = {
     let apps = state.applications;
     if (session.role === 'student') apps = filteredApps('SALIENTE');
     if (session.role === 'external') apps = filteredApps('ENTRANTE');
+    if (/admin|reviewer/.test(session.role)) apps = apps.filter(isOperationalApplication);
     const docs = apps.flatMap((a) => a.documents.map((d, i) => ({ ...d, app: a, index: i })));
     $('#view').innerHTML =
       head(
@@ -1392,7 +1398,7 @@ const views = {
                   <div class="doc-icon">PDF</div>
                   <div class="doc-main">
                     <strong>${esc(d.name)}</strong
-                    ><small>${d.app.id} · ${esc(d.app.student)}</small>
+                    ><small>${esc(d.app.displayId)} · ${esc(d.app.student)}</small>
                   </div>
                   ${badge(d.status)}${/admin|reviewer/.test(session.role) ? html`<button class="btn btn-sm btn-soft" onclick="reviewModal('${d.app.id}',${d.index})">Revisar</button>` : ''}
                 </div>`,
@@ -1402,8 +1408,14 @@ const views = {
       </div>`;
   },
   reports() {
+    const reportApplications = operationalApplications();
+    const outgoingPending = pendingApplications('SALIENTE');
+    const incomingPending = pendingApplications('ENTRANTE');
+    const inMobility = applicationsInMobility();
     const faculties = {};
-    state.applications.forEach((a) => (faculties[a.faculty] = (faculties[a.faculty] || 0) + 1));
+    reportApplications.forEach(
+      (application) => (faculties[application.faculty] = (faculties[application.faculty] || 0) + 1),
+    );
     $('#view').innerHTML =
       head(
         'Reportes',
@@ -1412,22 +1424,20 @@ const views = {
       ) +
       html`<div class="cards">
           <div class="card stat">
-            <div class="stat-label">Salientes</div>
-            <div class="stat-value">${filteredApps('SALIENTE').length}</div>
+            <div class="stat-label">Pendientes · SGMS salientes</div>
+            <div class="stat-value">${outgoingPending.length}</div>
           </div>
           <div class="card stat">
-            <div class="stat-label">Entrantes</div>
-            <div class="stat-value">${filteredApps('ENTRANTE').length}</div>
+            <div class="stat-label">Pendientes · SGME entrantes</div>
+            <div class="stat-value">${incomingPending.length}</div>
           </div>
           <div class="card stat">
-            <div class="stat-label">Convocatorias</div>
-            <div class="stat-value">${state.calls.length}</div>
+            <div class="stat-label">Expedientes en movilidad</div>
+            <div class="stat-value">${inMobility.length}</div>
           </div>
           <div class="card stat">
-            <div class="stat-label">Expedientes concluidos</div>
-            <div class="stat-value">
-              ${state.applications.filter((a) => /CONCLUID|FINALIZAD/.test(a.status)).length}
-            </div>
+            <div class="stat-label">Total que requiere seguimiento</div>
+            <div class="stat-value">${reportApplications.length}</div>
           </div>
         </div>
         <div class="grid-2">
@@ -1439,7 +1449,7 @@ const views = {
                   html`<p>${esc(f)} <strong style="float:right">${n}</strong></p>
                     <div class="progress">
                       <span
-                        style="width:${(100 * n) / Math.max(state.applications.length, 1)}%"
+                        style="width:${(100 * n) / Math.max(reportApplications.length, 1)}%"
                       ></span>
                     </div>`,
               )
@@ -1447,7 +1457,27 @@ const views = {
           </div>
           <div class="card">
             <h3>Estado de expedientes</h3>
-            ${state.applications.map((a) => html`<p style="display:flex;justify-content:space-between"><span>${a.id}</span>${badge(a.status)}</p>`).join('')}
+            <p class="muted">
+              Solo procesos que requieren seguimiento; no incluye borradores ni concluidos.
+            </p>
+            ${
+              reportApplications.length
+                ? reportApplications
+                    .map(
+                      (application) =>
+                        html`<div class="report-application-row">
+                          <span
+                            ><strong>${esc(application.student)}</strong
+                            ><small
+                              >${esc(application.displayId)} · ${esc(application.callTitle)}</small
+                            ></span
+                          >
+                          ${badge(application.status)}
+                        </div>`,
+                    )
+                    .join('')
+                : '<div class="empty">No hay expedientes que requieran seguimiento.</div>'
+            }
           </div>
         </div>`;
   },
@@ -1480,7 +1510,7 @@ function appView(dir, title, desc) {
         </div>
         <div class="card stat">
           <div class="stat-label">Observados</div>
-          <div class="stat-value">${apps.filter((a) => a.status === 'OBSERVADO').length}</div>
+          <div class="stat-value">${apps.filter((a) => a.status === 'OBSERVADA').length}</div>
         </div>
         <div class="card stat">
           <div class="stat-label">Aprobados</div>
@@ -1502,7 +1532,51 @@ function getMobilityApplications(
 function isClosedApplication(application) {
   // Los resultados negativos y la conclusión cierran esa postulación. El
   // expediente permanece en el historial, pero no puede reutilizarse.
-  return /RECHAZAD|NO_ACEPTADO|FINALIZAD|CONCLUID/.test(application.status);
+  return /RECHAZAD|NO_ACEPTADO|FINALIZAD|CONCLUID|CANCELAD/.test(application.status);
+}
+function isOperationalApplication(application) {
+  return application.status !== 'BORRADOR' && !isClosedApplication(application);
+}
+function operationalApplications() {
+  return state.applications.filter(isOperationalApplication);
+}
+function pendingApplications(direction = '') {
+  return operationalApplications().filter(
+    (application) =>
+      application.status !== 'EN_MOVILIDAD' && (!direction || application.direction === direction),
+  );
+}
+function applicationsInMobility() {
+  return operationalApplications().filter((application) => application.status === 'EN_MOVILIDAD');
+}
+function opportunityLabel(application) {
+  if (application.activityType === 'PROGRAMA') return 'Programa especial · sin restricciones';
+  if (application.activityType === 'PASANTIA') return 'Pasantía · sin restricciones';
+  return `Movilidad ${String(application.mobilityScope || 'por clasificar').toLowerCase()}`;
+}
+function successfulMobilityHistory(application) {
+  return state.applications.filter(
+    (item) =>
+      item.applicantId === application.applicantId &&
+      item.id !== application.id &&
+      item.direction === 'SALIENTE' &&
+      item.activityType === 'MOVILIDAD' &&
+      ['ACEPTADO', 'EN_MOVILIDAD', 'FINALIZADA'].includes(item.status),
+  );
+}
+function mobilityEligibility(application) {
+  if (application.direction !== 'SALIENTE' || application.activityType !== 'MOVILIDAD')
+    return { applies: false, conflicts: [] };
+  const previous = successfulMobilityHistory(application);
+  const year = String(application.period || '').slice(0, 4);
+  const conflicts = [];
+  if (previous.some((item) => String(item.period || '').startsWith(year)))
+    conflicts.push(`Ya registra una movilidad durante ${year}.`);
+  if (previous.some((item) => item.mobilityScope === application.mobilityScope))
+    conflicts.push(
+      `Ya utilizó su única movilidad ${String(application.mobilityScope).toLowerCase()}.`,
+    );
+  return { applies: true, conflicts };
 }
 function getActiveStudentApplication() {
   return getStudentApplications().find((application) => !isClosedApplication(application)) || null;
@@ -1700,7 +1774,7 @@ function studentDashboard() {
     ? ''
     : application.status === 'BORRADOR'
       ? 'Completa los datos y documentos pendientes antes de enviar tu postulación.'
-      : application.status === 'OBSERVADO'
+      : application.status === 'OBSERVADA'
         ? 'Tienes observaciones pendientes. Revisa el detalle de tus documentos.'
         : 'OCRI está revisando tu expediente. Aquí verás cualquier novedad del proceso.';
   $('#view').innerHTML = html`<div class="dashboard-heading student-welcome">
@@ -1837,7 +1911,7 @@ function operationalMetric(value, label, target) {
   </button>`;
 }
 function adminDashboard(apps) {
-  const active = apps.filter((a) => !isClosedApplication(a) && a.status !== 'BORRADOR');
+  const active = apps.filter(isOperationalApplication);
   const closing = state.calls.filter((c) => {
     const days = (new Date(`${c.end}T23:59:59`) - new Date()) / 86400000;
     return c.status === 'ACTIVA' && days >= 0 && days <= 14;
@@ -1849,11 +1923,11 @@ function adminDashboard(apps) {
       '<button class="btn btn-primary" onclick="callModal()">+ Nueva convocatoria</button>',
     ) +
     html`<div class="operational-metrics">
-        ${operationalMetric(active.filter((a) => /POSTULAD|REVISION|VALIDACION/.test(a.status)).length, 'Expedientes por revisar', 'applications')}
-        ${operationalMetric(active.filter((a) => a.status === 'OBSERVADO').length, 'Subsanaciones pendientes', 'applications')}
-        ${operationalMetric(active.filter((a) => a.direction === 'SALIENTE' && a.status === 'APROBADO_OCRI').length, 'Pendientes de nominación', 'applications')}
+        ${operationalMetric(pendingApplications('SALIENTE').length, 'Pendientes · SGMS salientes', 'applications')}
+        ${operationalMetric(pendingApplications('ENTRANTE').length, 'Pendientes · SGME entrantes', 'applications')}
+        ${operationalMetric(applicationsInMobility().length, 'Expedientes en movilidad', 'applications')}
+        ${operationalMetric(active.filter((a) => a.status === 'OBSERVADA').length, 'Subsanaciones pendientes', 'applications')}
         ${operationalMetric(active.filter((a) => a.direction === 'SALIENTE' && /NOMINAD|EVALUACION_DESTINO/.test(a.status)).length, 'Esperan decisión de destino', 'applications')}
-        ${operationalMetric(active.filter((a) => a.status === 'EN_MOVILIDAD').length, 'Movilidades en curso', 'applications')}
         ${operationalMetric(closing.length, 'Convocatorias por cerrar · 14 días', 'calls')}
       </div>
       <div class="role-flow-grid">
@@ -1938,63 +2012,77 @@ function operationalTable(apps) {
   </div>`;
 }
 function adminApplicationsView() {
-  const apps = state.applications.filter((a) => a.status !== 'BORRADOR');
+  const apps = operationalApplications();
   const options = (values) =>
     [...new Set(values.filter(Boolean))]
       .map((v) => `<option value="${esc(v)}">${esc(STATUS_LABELS[v] || v)}</option>`)
       .join('');
   $('#view').innerHTML =
-    head('Expedientes', 'Consulta cada proceso, sus documentos y su estado actual.') +
-    html` <section class="card operational-section">
-      <form
-        id="queueFilters"
-        class="queue-filters"
-        onsubmit="event.preventDefault()"
-        oninput="filterOperationalQueue()"
-      >
-        <label
-          >Buscar<input class="input" name="search" placeholder="Estudiante o convocatoria"
-        /></label>
-        <label
-          >Flujo<select class="input" name="direction">
-            <option value="">Todos los flujos</option>
-            <option value="SALIENTE" ${operationalDirection === 'SALIENTE' ? 'selected' : ''}>
-              SGMS · Saliente
-            </option>
-            <option value="ENTRANTE" ${operationalDirection === 'ENTRANTE' ? 'selected' : ''}>
-              SGME · Entrante
-            </option>
-          </select></label
+    head(
+      'Expedientes activos',
+      'Procesos pendientes y movilidades en curso. Los borradores son privados y los concluidos permanecen en el historial personal.',
+    ) +
+    html`<div class="operational-metrics expediente-groups">
+        ${operationalMetric(pendingApplications('SALIENTE').length, 'Pendientes · SGMS salientes', 'applications')}
+        ${operationalMetric(pendingApplications('ENTRANTE').length, 'Pendientes · SGME entrantes', 'applications')}
+        ${operationalMetric(applicationsInMobility().length, 'Expedientes en movilidad', 'applications')}
+      </div>
+      <section class="card operational-section">
+        <div class="section-title">
+          <div>
+            <h3>Seguimiento operativo</h3>
+            <p class="muted">Busca por persona, convocatoria o identificador de expediente.</p>
+          </div>
+        </div>
+        <form
+          id="queueFilters"
+          class="queue-filters"
+          onsubmit="event.preventDefault()"
+          oninput="filterOperationalQueue()"
         >
-        <label
-          >Estado<select class="input" name="status">
-            <option value="">Todos los estados</option>
-            ${options(apps.map((a) => a.status))}
-          </select></label
-        >
-        <label
-          >Periodo<select class="input" name="period">
-            <option value="">Todos los periodos</option>
-            ${options(state.calls.map((c) => c.period))}
-          </select></label
-        >
-        <label
-          >Carta<select class="input" name="letter">
-            <option value="">Todas las cartas</option>
-            <option value="waiting">Esperando carta</option>
-            <option value="review">Carta por revisar</option>
-          </select></label
-        >
-        <label
-          >Facultad<select class="input" name="faculty">
-            <option value="">Todas las facultades</option>
-            ${options(apps.map((a) => a.faculty))}
-          </select></label
-        >
-      </form>
-      <p id="queueCount" class="muted" aria-live="polite"></p>
-      <div id="queueRows"></div>
-    </section>`;
+          <label
+            >Buscar<input class="input" name="search" placeholder="Estudiante o convocatoria"
+          /></label>
+          <label
+            >Flujo<select class="input" name="direction">
+              <option value="">Todos los flujos</option>
+              <option value="SALIENTE" ${operationalDirection === 'SALIENTE' ? 'selected' : ''}>
+                SGMS · Saliente
+              </option>
+              <option value="ENTRANTE" ${operationalDirection === 'ENTRANTE' ? 'selected' : ''}>
+                SGME · Entrante
+              </option>
+            </select></label
+          >
+          <label
+            >Estado<select class="input" name="status">
+              <option value="">Todos los estados</option>
+              ${options(apps.map((a) => a.status))}
+            </select></label
+          >
+          <label
+            >Periodo<select class="input" name="period">
+              <option value="">Todos los periodos</option>
+              ${options(state.calls.map((c) => c.period))}
+            </select></label
+          >
+          <label
+            >Carta<select class="input" name="letter">
+              <option value="">Todas las cartas</option>
+              <option value="waiting">Esperando carta</option>
+              <option value="review">Carta por revisar</option>
+            </select></label
+          >
+          <label
+            >Facultad<select class="input" name="faculty">
+              <option value="">Todas las facultades</option>
+              ${options(apps.map((a) => a.faculty))}
+            </select></label
+          >
+        </form>
+        <p id="queueCount" class="muted" aria-live="polite"></p>
+        <div id="queueRows"></div>
+      </section>`;
   filterOperationalQueue();
 }
 function filterOperationalQueue() {
@@ -2004,7 +2092,7 @@ function filterOperationalQueue() {
   const apps = state.applications.filter((a) => {
     const call = state.calls.find((c) => c.id === a.callId);
     return (
-      a.status !== 'BORRADOR' &&
+      isOperationalApplication(a) &&
       (!filters.direction || filters.direction === a.direction) &&
       (!filters.status || filters.status === a.status) &&
       (!filters.period || filters.period === call?.period) &&
@@ -2357,6 +2445,10 @@ function appTable(apps) {
   </div>`;
 }
 function applicationDetail(a) {
+  const eligibility = mobilityEligibility(a);
+  const applicantHistoryCount = state.applications.filter(
+    (application) => application.applicantId === a.applicantId && application.status !== 'BORRADOR',
+  ).length;
   return html`<section class="applicant-profile-card">
       <div class="applicant-profile-avatar">
         ${
@@ -2382,11 +2474,33 @@ function applicationDetail(a) {
             ><strong>Carrera profesional</strong>${esc(a.academicProgram || 'Por registrar')}</span
           >
           <span><strong>Universidad</strong>${esc(a.applicant?.university || 'UNSAAC')}</span>
+          <span><strong>Teléfono</strong>${esc(a.applicant?.phone || 'No registrado')}</span>
+          <span><strong>Dirección</strong>${esc(a.applicant?.address || 'No registrada')}</span>
         </div>
       </div>
-      <button class="btn btn-soft btn-sm" type="button" onclick="applicantProfileModal('${a.id}')">
-        Ver perfil
+      <button class="btn btn-soft btn-sm" type="button" onclick="applicantHistoryModal('${a.id}')">
+        Ver historial (${applicantHistoryCount})
       </button>
+    </section>
+    <section
+      class="mobility-eligibility ${eligibility.conflicts.length ? 'has-conflicts' : 'is-clear'}"
+    >
+      <div>
+        <span class="eyebrow">Tipo de oportunidad</span>
+        <strong>${esc(opportunityLabel(a))}</strong>
+      </div>
+      ${
+        eligibility.applies
+          ? eligibility.conflicts.length
+            ? html`<div>
+                <span class="eyebrow">Restricciones detectadas</span>
+                <ul>
+                  ${eligibility.conflicts.map((conflict) => `<li>${esc(conflict)}</li>`).join('')}
+                </ul>
+              </div>`
+            : '<div><span class="eyebrow">Validación de historial</span><strong>Sin incompatibilidades registradas</strong></div>'
+          : '<div><span class="eyebrow">Restricciones</span><strong>No aplican a esta oportunidad especial</strong></div>'
+      }
     </section>
     <div class="grid-2">
       <div class="card">
@@ -2429,53 +2543,43 @@ function applicationDetail(a) {
       </div>
     </div>`;
 }
-function applicantProfileModal(id) {
+function applicantHistoryModal(id) {
   const application = state.applications.find((item) => item.id === id);
   if (!application) return;
-  const applicant = application.applicant || {};
+  const history = state.applications
+    .filter((item) => item.applicantId === application.applicantId && item.status !== 'BORRADOR')
+    .sort((first, second) => String(second.period).localeCompare(String(first.period)));
   closeModal();
   modal(
     html`<div class="modal-head">
         <div>
-          <span class="eyebrow">Perfil del postulante</span>
-          <h2>${esc(application.student)}</h2>
+          <span class="eyebrow">Historial del postulante</span>
+          <h2>Postulaciones y movilidades</h2>
+          <p class="muted">${esc(application.student)} · Código ${esc(application.code)}</p>
         </div>
         <button class="modal-close" onclick="closeModal()">×</button>
       </div>
-      <section class="applicant-profile-full">
-        <div class="applicant-profile-avatar large">
-          ${
-            applicant.photoUrl
-              ? `<img src="${esc(applicant.photoUrl)}" alt="Foto de ${esc(application.student)}" />`
-              : `<span>${esc(
-                  application.student
-                    .split(/\s+/)
-                    .slice(0, 2)
-                    .map((name) => name[0])
-                    .join('')
-                    .toUpperCase(),
-                )}</span>`
-          }
-        </div>
-        <div class="profile-data-grid">
-          <p>
-            <strong>Correo institucional</strong
-            ><span>${esc(applicant.email || 'No registrado')}</span>
-          </p>
-          <p><strong>Código de estudiante</strong><span>${esc(application.code)}</span></p>
-          <p>
-            <strong>Facultad</strong><span>${esc(application.faculty || 'Por registrar')}</span>
-          </p>
-          <p>
-            <strong>Carrera profesional</strong
-            ><span>${esc(application.academicProgram || 'Por registrar')}</span>
-          </p>
-          <p><strong>Universidad</strong><span>${esc(applicant.university || 'UNSAAC')}</span></p>
-          <p><strong>Teléfono</strong><span>${esc(applicant.phone || 'No registrado')}</span></p>
-          <p><strong>Dirección</strong><span>${esc(applicant.address || 'No registrada')}</span></p>
-        </div>
-      </section>`,
-    'applicant-profile-dialog',
+      <div class="applicant-history-list">
+        ${history
+          .map(
+            (item) =>
+              html`<article class="applicant-history-item ${item.id === id ? 'is-current' : ''}">
+                <div>
+                  <span
+                    >${esc(item.period || 'Periodo no registrado')} ·
+                    ${item.direction === 'SALIENTE' ? 'SGMS saliente' : 'SGME entrante'}</span
+                  >
+                  <strong>${esc(item.callTitle)}</strong>
+                  <small>${esc(opportunityLabel(item))} · ${esc(item.displayId)}</small>
+                </div>
+                <div>
+                  ${badge(item.status)}${item.id === id ? '<small>Expediente actual</small>' : ''}
+                </div>
+              </article>`,
+          )
+          .join('')}
+      </div>`,
+    'applicant-history-dialog',
   );
 }
 async function viewApplicationDocument(applicationId, documentId) {
@@ -2512,7 +2616,16 @@ function callCard(c) {
     <div class="call-body">
       <div class="call-title-row"><h3 class="${titleSize}">${esc(c.title)}</h3></div>
       <div class="call-meta-line">
-        <strong>${esc(c.period)}</strong><span></span><b>Límite: ${shortDate(c.end)}</b>
+        <strong>${esc(c.period)}</strong><span></span
+        ><b
+          >${esc(
+            c.activityType === 'MOVILIDAD'
+              ? `Movilidad ${c.mobilityScope.toLowerCase()}`
+              : c.activityType === 'PROGRAMA'
+                ? 'Programa especial'
+                : 'Pasantía',
+          )}</b
+        ><span></span><b>Límite: ${shortDate(c.end)}</b>
       </div>
     </div>
   </article>`;
@@ -2571,6 +2684,8 @@ function callModal() {
     title: '',
     direction: 'SALIENTE',
     period: nextAcademicPeriod(),
+    activityType: 'MOVILIDAD',
+    mobilityScope: 'INTERNACIONAL',
     end: '',
     coverImage: '',
     coverName: '',
@@ -2588,6 +2703,8 @@ function editCall(id) {
   editingCallId = id;
   callWizardStep = 1;
   callDraft = structuredClone(source);
+  callDraft.activityType = callDraft.activityType || 'MOVILIDAD';
+  callDraft.mobilityScope = callDraft.mobilityScope || 'INTERNACIONAL';
   callDraft.guidelines = callDraft.guidelines || [];
   callDraft.guidelinesText =
     callDraft.guidelinesText || callDraft.guidelines.map((item) => `• ${item}`).join('\n');
@@ -2623,6 +2740,11 @@ function syncCallDraft() {
     callDraft.title = text('title', callDraft.title);
     callDraft.direction = text('direction', callDraft.direction);
     callDraft.period = text('period', callDraft.period);
+    callDraft.activityType = text('activity_type', callDraft.activityType);
+    callDraft.mobilityScope =
+      callDraft.activityType === 'MOVILIDAD'
+        ? text('mobility_scope', callDraft.mobilityScope || 'INTERNACIONAL')
+        : '';
     callDraft.end = text('end', callDraft.end);
   }
   if (has('guidelines_text')) {
@@ -2747,6 +2869,45 @@ function wizardInformation() {
           </option>
         </select>
       </div>
+      <div class="field">
+        <label>Tipo de oportunidad</label
+        ><select class="input" name="activity_type" onchange="changeCallActivityType(this.value)">
+          <option value="MOVILIDAD" ${callDraft.activityType === 'MOVILIDAD' ? 'selected' : ''}>
+            Movilidad académica
+          </option>
+          <option value="PROGRAMA" ${callDraft.activityType === 'PROGRAMA' ? 'selected' : ''}>
+            Programa especial
+          </option>
+          <option value="PASANTIA" ${callDraft.activityType === 'PASANTIA' ? 'selected' : ''}>
+            Pasantía
+          </option></select
+        ><small class="field-help"
+          >Los programas especiales y pasantías no consumen cupos de movilidad.</small
+        >
+      </div>
+      ${
+        callDraft.activityType === 'MOVILIDAD'
+          ? html`<div class="field">
+              <label>Ámbito de la movilidad</label
+              ><select class="input" name="mobility_scope">
+                <option
+                  value="INTERNACIONAL"
+                  ${callDraft.mobilityScope === 'INTERNACIONAL' ? 'selected' : ''}
+                >
+                  Internacional
+                </option>
+                <option
+                  value="NACIONAL"
+                  ${callDraft.mobilityScope === 'NACIONAL' ? 'selected' : ''}
+                >
+                  Nacional
+                </option></select
+              ><small class="field-help"
+                >Cada estudiante puede realizar una nacional y una internacional en total.</small
+              >
+            </div>`
+          : ''
+      }
       <div class="field">
         <label>Imagen de portada <span class="muted">(opcional)</span></label
         ><input
@@ -2974,6 +3135,18 @@ function wizardReview() {
     <div class="review-summary">
       <div><span>Convocatoria</span><strong>${esc(callDraft.title || 'Sin título')}</strong></div>
       <div><span>Periodo</span><strong>${callDraft.period}</strong></div>
+      <div>
+        <span>Tipo</span
+        ><strong
+          >${esc(
+            callDraft.activityType === 'MOVILIDAD'
+              ? `Movilidad ${callDraft.mobilityScope.toLowerCase()}`
+              : callDraft.activityType === 'PROGRAMA'
+                ? 'Programa especial'
+                : 'Pasantía',
+          )}</strong
+        >
+      </div>
       <div><span>Fecha límite</span><strong>${deadline}</strong></div>
     </div>
     <div class="review-checks">
@@ -3031,6 +3204,13 @@ function goCallWizardStep(step) {
 function changeCallDirection(direction) {
   syncCallDraft();
   callDraft.direction = direction;
+  renderCallWizard();
+}
+function changeCallActivityType(activityType) {
+  syncCallDraft();
+  callDraft.activityType = activityType;
+  callDraft.mobilityScope =
+    activityType === 'MOVILIDAD' ? callDraft.mobilityScope || 'INTERNACIONAL' : '';
   renderCallWizard();
 }
 function selectCallCover(input) {
@@ -3133,7 +3313,7 @@ async function saveCallDraft(status) {
       resources: callDraft.resources.map(({ dataUrl, downloadUrl, ...resource }) => resource),
       status,
     };
-    const { error } = await supabase.rpc('admin_upsert_call', { payload });
+    const { error } = await supabase.rpc('admin_upsert_classified_call', { payload });
     if (error) throw error;
     editingCallId = null;
     await loadCallsFromDatabase();
@@ -3215,28 +3395,42 @@ function showCallSummary(id) {
       : '';
   const activeStudentApplication =
     session?.role === 'student' ? getActiveStudentApplication() : null;
+  const rejectedStudentApplication =
+    session?.role === 'student'
+      ? getStudentApplications().find((item) => /RECHAZAD|NO_ACEPTADO/.test(item.status))
+      : null;
   const studentAction =
     session?.role === 'student' && call.direction === 'SALIENTE'
-      ? activeStudentApplication && activeStudentApplication.callId !== call.id
+      ? rejectedStudentApplication && rejectedStudentApplication.callId !== call.id
         ? html`<div class="call-active-restriction">
-            <span>Ya tienes una postulación activa.</span>
+            <span>Una postulación rechazada impide iniciar otra.</span>
             <button
               class="btn btn-primary"
-              onclick="openStudentApplication('${activeStudentApplication.id}')"
+              onclick="openStudentApplication('${rejectedStudentApplication.id}')"
             >
-              Ver mi postulación
+              Ver historial
             </button>
           </div>`
-        : application && application.status !== 'BORRADOR'
-          ? html`<button
-              class="btn btn-primary"
-              onclick="openStudentApplication('${application.id}')"
-            >
-              ${/RECHAZAD|NO_ACEPTADO/.test(application.status) ? 'Ver resultado' : 'Ver mi postulación'}
-            </button>`
-          : html`<button class="btn btn-primary" onclick="startApplication('${call.id}')">
-              ${application ? 'Continuar postulación' : 'Postular'}
-            </button>`
+        : activeStudentApplication && activeStudentApplication.callId !== call.id
+          ? html`<div class="call-active-restriction">
+              <span>Ya tienes una postulación activa.</span>
+              <button
+                class="btn btn-primary"
+                onclick="openStudentApplication('${activeStudentApplication.id}')"
+              >
+                Ver mi postulación
+              </button>
+            </div>`
+          : application && application.status !== 'BORRADOR'
+            ? html`<button
+                class="btn btn-primary"
+                onclick="openStudentApplication('${application.id}')"
+              >
+                ${/RECHAZAD|NO_ACEPTADO/.test(application.status) ? 'Ver resultado' : 'Ver mi postulación'}
+              </button>`
+            : html`<button class="btn btn-primary" onclick="startApplication('${call.id}')">
+                ${application ? 'Continuar postulación' : 'Postular'}
+              </button>`
       : '';
   const coverStyle = call.coverImage
     ? ` style="background-image:url('${esc(call.coverImage)}')"`
@@ -3244,7 +3438,17 @@ function showCallSummary(id) {
   modal(
     html`<div class="call-detail-hero ${call.coverImage ? 'has-image' : ''}" ${coverStyle}>
         <div class="call-detail-overlay"></div>
-        <div class="call-detail-flags">${badge(call.status)}${badge(call.direction)}</div>
+        <div class="call-detail-flags">
+          ${badge(call.status)}${badge(call.direction)}<span class="badge neutral"
+            >${esc(
+              call.activityType === 'MOVILIDAD'
+                ? `Movilidad ${call.mobilityScope.toLowerCase()}`
+                : call.activityType === 'PROGRAMA'
+                  ? 'Programa especial'
+                  : 'Pasantía',
+            )}</span
+          >
+        </div>
         <button class="modal-close call-detail-close" onclick="closeModal()" aria-label="Cerrar">
           ×
         </button>
@@ -3613,7 +3817,9 @@ function reviewModal(id, index) {
         <button class="modal-close" onclick="closeModal()">×</button>
       </div>
       <p>
-        <strong>${esc(d.name)}</strong><br /><span class="muted">${a.id} · ${esc(a.student)}</span>
+        <strong>${esc(d.name)}</strong><br /><span class="muted"
+          >${esc(a.displayId)} · ${esc(a.student)}</span
+        >
       </p>
       <div class="field">
         <label>Resultado</label
@@ -3647,7 +3853,7 @@ function saveReview(id, i) {
   a.documents[i].comment = $('#comment').value;
   a.documents[i].reviewedBy = session.name;
   a.documents[i].reviewedAt = new Date().toISOString();
-  if (s === 'OBSERVADO') a.status = 'OBSERVADO';
+  if (s === 'OBSERVADO') a.status = 'OBSERVADA';
   save();
   closeModal();
   render();
@@ -3732,6 +3938,15 @@ function createNomination(e) {
 }
 async function startApplication(callId) {
   closeModal();
+  const rejectedApplication = getStudentApplications().find((application) =>
+    /RECHAZAD|NO_ACEPTADO/.test(application.status),
+  );
+  if (rejectedApplication && rejectedApplication.callId !== callId) {
+    openStudentApplication(rejectedApplication.id);
+    return toast(
+      'Tienes una postulación rechazada. No puedes iniciar otra, pero su historial siempre estará disponible.',
+    );
+  }
   const activeApplication = getActiveStudentApplication();
   if (activeApplication && activeApplication.callId !== callId) {
     openStudentApplication(activeApplication.id);
@@ -4121,13 +4336,27 @@ async function submitStudentApplication() {
 }
 function exportCSV() {
   const rows = [
-    ['Expediente', 'Dirección', 'Estudiante', 'Facultad', 'Universidad', 'Estado', 'Fecha'],
-    ...state.applications.map((a) => [
-      a.id,
+    [
+      'Expediente',
+      'Dirección',
+      'Estudiante',
+      'Código',
+      'Facultad',
+      'Carrera profesional',
+      'Convocatoria',
+      'Tipo',
+      'Estado',
+      'Fecha',
+    ],
+    ...operationalApplications().map((a) => [
+      a.displayId,
       a.direction,
       a.student,
+      a.code,
       a.faculty,
+      a.academicProgram,
       a.destination,
+      opportunityLabel(a),
       a.status,
       a.submitted,
     ]),
