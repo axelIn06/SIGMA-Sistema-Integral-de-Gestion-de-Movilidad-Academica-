@@ -5,6 +5,7 @@ import unsaacShieldUrl from './assets/unsaac-escudo.png';
 import loginBackgroundUrl from './assets/Fondo_PantallaLogIn.jpg';
 import unsaacCampusUrl from './assets/unsaac-ciudad-universitaria.webp';
 import sigmaAirplaneUrl from './assets/sigma-airplane.svg';
+import { academicPeriodForDate, parseBrochureContent } from './brochure-parser.js';
 
 // Recursos institucionales locales: Vite transforma estas rutas al generar la aplicación.
 document.documentElement.style.setProperty('--sigma-shield-image', `url("${unsaacShieldUrl}")`);
@@ -98,7 +99,7 @@ const STATUS_DESCRIPTIONS = {
   FINALIZADA: 'La movilidad académica concluyó.',
   RECHAZADA:
     'OCRI rechazó el expediente. La postulación queda cerrada y permanece visible en el historial.',
-  CANCELADO: 'El proceso se detuvo. OCRI puede restaurarlo a la etapa correcta si fue un error.',
+  CANCELADO: 'La postulación fue retirada o cancelada y permanece visible en el historial.',
   INVITACION_ENVIADA:
     'La universidad de origen recibió la invitación para que el estudiante complete el proceso.',
   PENDIENTE: 'Aún falta una acción o una revisión.',
@@ -379,9 +380,8 @@ async function loadAcademicCatalog() {
   }));
 }
 
-async function uploadDataUrl(dataUrl, path) {
-  const response = await fetch(dataUrl);
-  const blob = await response.blob();
+async function uploadCallAsset(source, path) {
+  const blob = source instanceof Blob ? source : await (await fetch(source)).blob();
   const { error } = await supabase.storage.from('call-assets').upload(path, blob, { upsert: true });
   if (error) throw error;
   return path;
@@ -1590,6 +1590,49 @@ function openStudentApplication(id) {
   route = session.role === 'external' ? 'sgme' : 'sgms';
   render();
 }
+function canStudentWithdrawApplication(application) {
+  return (
+    session?.role === 'student' &&
+    application.direction === 'SALIENTE' &&
+    application.applicantId === session.userId &&
+    application.status === 'ENVIADA'
+  );
+}
+function studentWithdrawalGuidance(application) {
+  if (
+    session?.role !== 'student' ||
+    application.direction !== 'SALIENTE' ||
+    application.applicantId !== session.userId ||
+    canStudentWithdrawApplication(application)
+  )
+    return '';
+  if (
+    [
+      'NOMINADO_UNSAAC',
+      'EN_EVALUACION_DESTINO',
+      'CARTA_PENDIENTE',
+      'ACEPTADO',
+      'EN_MOVILIDAD',
+    ].includes(application.status)
+  )
+    return html`<aside class="publication-note">
+      <strong>Desistimiento formal</strong>
+      <span
+        >Esta postulación ya avanzó a una etapa institucional. Para desistir, presenta una carta a
+        OCRI explicando el motivo; OCRI gestionará el trámite con las universidades
+        involucradas.</span
+      >
+    </aside>`;
+  if (['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'APROBADA_OCRI'].includes(application.status))
+    return html`<aside class="publication-note">
+      <strong>Retiro mediante OCRI</strong>
+      <span
+        >La postulación ya no puede retirarse directamente desde la plataforma. Comunícate con OCRI
+        para evaluar el procedimiento correspondiente.</span
+      >
+    </aside>`;
+  return '';
+}
 function studentApplicationCard(application, active = false) {
   const call = state.calls.find((item) => item.id === application.callId);
   const uploaded = application.documents.filter((document) => document.storagePath).length;
@@ -1739,8 +1782,18 @@ function studentApplicationDetailView(application) {
               </button>`
             : ''
         }
+        ${
+          canStudentWithdrawApplication(application)
+            ? html`<button
+                class="btn btn-danger"
+                onclick="withdrawStudentApplication('${application.id}')"
+              >
+                Retirar postulación
+              </button>`
+            : ''
+        }
       </section>
-      ${acceptanceLetterSection(application)}
+      ${studentWithdrawalGuidance(application)} ${acceptanceLetterSection(application)}
       <section class="card student-detail-section">
         <div class="student-detail-heading">
           <div>
@@ -2677,10 +2730,8 @@ function closeModal() {
 // -----------------------------------------------------------------------------
 // Convocatorias: asistente de creación, edición y publicación local
 // -----------------------------------------------------------------------------
-function callModal() {
-  editingCallId = null;
-  callWizardStep = 1;
-  callDraft = {
+function emptyCallDraft() {
+  return {
     title: '',
     direction: 'SALIENTE',
     period: nextAcademicPeriod(),
@@ -2694,8 +2745,259 @@ function callModal() {
     documents: [],
     resources: [],
     notice: { links: [] },
+    importMeta: null,
   };
+}
+function callModal() {
+  if (session?.role !== 'admin') return;
+  editingCallId = null;
+  callWizardStep = 1;
+  callDraft = emptyCallDraft();
+  renderCallStart();
+}
+function renderCallStart() {
+  modal(
+    html`<div class="brochure-start">
+      <div class="brochure-start-brand">
+        <strong>SIGMA</strong>
+        <span>OFICINA DE COOPERACIÓN Y RELACIONES INTERNACIONALES</span>
+      </div>
+      <button class="wizard-exit" onclick="closeModal()">← Volver a convocatorias</button>
+      <div class="brochure-start-copy">
+        <div class="eyebrow">Nueva convocatoria</div>
+        <h2>¿Cómo deseas comenzar?</h2>
+        <p>
+          Importa el brochure para adelantar el formulario automáticamente o empieza con una
+          convocatoria vacía.
+        </p>
+      </div>
+      <div class="brochure-start-options">
+        <label class="brochure-option brochure-option-primary" for="brochure-import-input">
+          <span class="brochure-option-icon">PDF</span>
+          <span>
+            <strong>Importar brochure</strong>
+            <small>Lectura local y gratuita de información, requisitos y documentos.</small>
+          </span>
+          <span class="brochure-option-action">Seleccionar PDF →</span>
+        </label>
+        <input
+          id="brochure-import-input"
+          class="visually-hidden"
+          type="file"
+          accept="application/pdf,.pdf"
+          onchange="analyzeCallBrochure(this)"
+        />
+        <button type="button" class="brochure-option" onclick="startManualCall()">
+          <span class="brochure-option-icon brochure-option-icon-manual">＋</span>
+          <span>
+            <strong>Crear manualmente</strong>
+            <small>Completa cada sección del asistente desde cero.</small>
+          </span>
+          <span class="brochure-option-action">Empezar →</span>
+        </button>
+      </div>
+      <div class="brochure-start-note">
+        <span>✓</span>
+        <p>
+          El análisis ocurre en este dispositivo: no usa IA ni consume tokens. Al guardar, el PDF se
+          conserva como material de la convocatoria en el Supabase institucional.
+        </p>
+      </div>
+      <div id="brochure-import-status" class="brochure-import-status" aria-live="polite"></div>
+    </div>`,
+    'modal-brochure',
+  );
+}
+function startManualCall() {
+  callWizardStep = 1;
   renderCallWizard();
+}
+function joinPdfLineItems(items) {
+  return items
+    .sort((a, b) => a.x - b.x)
+    .map((item) => item.text)
+    .join(' ')
+    .replace(/\s+([,.;:!?%)])/g, '$1')
+    .replace(/([(¿¡])\s+/g, '$1')
+    .trim();
+}
+async function extractLocalPdfContent(file) {
+  const [{ getDocument, GlobalWorkerOptions }, { default: pdfWorkerUrl }] = await Promise.all([
+    import('pdfjs-dist'),
+    import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+  ]);
+  GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  const loadingTask = getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+  const pdf = await loadingTask.promise;
+  const pages = [];
+  const links = [];
+
+  try {
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const [content, annotations] = await Promise.all([
+        page.getTextContent(),
+        page.getAnnotations({ intent: 'display' }),
+      ]);
+      const rows = [];
+      const seenItems = new Set();
+
+      content.items.forEach((item) => {
+        const text = String(item.str || '').trim();
+        if (!text) return;
+        const x = Number(item.transform?.[4] || 0);
+        const y = Number(item.transform?.[5] || 0);
+        const key = `${Math.round(x)}:${Math.round(y)}:${text}`;
+        if (seenItems.has(key)) return;
+        seenItems.add(key);
+        let row = rows.find((candidate) => Math.abs(candidate.y - y) <= 3);
+        if (!row) {
+          row = { y, items: [] };
+          rows.push(row);
+        }
+        row.items.push({ x, text });
+      });
+
+      const seenLines = new Set();
+      const lines = rows
+        .sort((a, b) => b.y - a.y)
+        .map((row) => joinPdfLineItems(row.items))
+        .filter((line) => {
+          const key = line.toLocaleLowerCase('es-PE');
+          if (!line || seenLines.has(key)) return false;
+          seenLines.add(key);
+          return true;
+        });
+      pages.push({ pageNumber, lines });
+      annotations.forEach((annotation) => {
+        const url = String(annotation.url || annotation.unsafeUrl || '').trim();
+        if (/^https?:\/\//i.test(url) && !links.some((link) => link.url === url))
+          links.push({ url, pageNumber });
+      });
+      page.cleanup();
+    }
+  } finally {
+    if (typeof pdf.destroy === 'function') await pdf.destroy();
+    else if (typeof loadingTask.destroy === 'function') await loadingTask.destroy();
+  }
+  return { pages, links };
+}
+function importedDocumentDescription(document) {
+  const stage = {
+    AFTER_ACCEPTANCE: 'Después de la aceptación',
+    INFORMATIONAL: 'Información complementaria',
+  }[document.stage];
+  return [stage ? `${stage}.` : '', document.description || ''].filter(Boolean).join(' ');
+}
+function applyBrochureExtraction(extraction, file) {
+  const university = String(extraction.university_name || '').trim();
+  const country = String(extraction.country || '').trim();
+  const fallbackTitle = university
+    ? `Movilidad académica · ${university}${country ? ` (${country})` : ''}`
+    : '';
+  const guidelines = Array.isArray(extraction.guidelines)
+    ? extraction.guidelines.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  const documents = Array.isArray(extraction.documents)
+    ? extraction.documents
+        .filter((item) => item?.title)
+        .map((item) => ({
+          title: String(item.title).trim(),
+          description: importedDocumentDescription(item),
+          required: item.stage === 'APPLICATION' ? item.required !== false : false,
+          importStage: item.stage || 'APPLICATION',
+        }))
+    : [];
+  const notices = Array.isArray(extraction.important_notices)
+    ? extraction.important_notices
+        .filter((item) => item?.text)
+        .map((item) => ({ label: String(item.text).trim(), url: String(item.url || '').trim() }))
+    : [];
+  const warnings = Array.isArray(extraction.warnings)
+    ? extraction.warnings.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  if (!extraction.closing_date && extraction.closing_date_text)
+    warnings.unshift(`Confirma la fecha de cierre: ${extraction.closing_date_text}.`);
+
+  callDraft = {
+    ...emptyCallDraft(),
+    title: String(extraction.title || fallbackTitle).trim(),
+    direction: ['SALIENTE', 'ENTRANTE'].includes(extraction.direction)
+      ? extraction.direction
+      : 'SALIENTE',
+    period: /^\d{4}-(I|II)$/.test(String(extraction.period || ''))
+      ? extraction.period
+      : nextAcademicPeriod(),
+    activityType: ['MOVILIDAD', 'PROGRAMA', 'PASANTIA'].includes(extraction.activity_type)
+      ? extraction.activity_type
+      : 'MOVILIDAD',
+    mobilityScope: ['INTERNACIONAL', 'NACIONAL'].includes(extraction.mobility_scope)
+      ? extraction.mobility_scope
+      : 'INTERNACIONAL',
+    end: /^\d{4}-\d{2}-\d{2}$/.test(String(extraction.closing_date || ''))
+      ? extraction.closing_date
+      : '',
+    guidelines,
+    guidelinesText: guidelines.map((item) => `• ${item}`).join('\n'),
+    documents,
+    resources: [
+      {
+        description: 'Brochure oficial de la convocatoria',
+        fileName: file.name,
+        pendingFile: file,
+        storagePath: '',
+      },
+    ],
+    notice: { links: notices },
+    importMeta: {
+      fileName: file.name,
+      confidence: extraction.confidence || 'LOW',
+      warnings,
+      university,
+      country,
+      method: extraction.extraction_method || 'LOCAL_PDF_TEXT',
+      pageCount: extraction.page_count || 0,
+    },
+  };
+}
+async function analyzeCallBrochure(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  if (session?.role !== 'admin') return toast('Solo OCRI puede importar brochures.');
+  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+    input.value = '';
+    return toast('Selecciona un archivo PDF.');
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    input.value = '';
+    return toast('El brochure no puede superar los 8 MB.');
+  }
+
+  const status = $('#brochure-import-status');
+  const options = document.querySelector('.brochure-start-options');
+  options?.classList.add('is-processing');
+  if (status)
+    status.innerHTML = html`<span class="brochure-spinner"></span>
+      <div>
+        <strong>Leyendo ${esc(file.name)} en este dispositivo</strong
+        ><small>Reconstruyendo requisitos y documentos sin IA ni consumo de tokens.</small>
+      </div>`;
+
+  try {
+    const { pages, links } = await extractLocalPdfContent(file);
+    const extraction = parseBrochureContent(pages, links, { fileName: file.name });
+    extraction.page_count = pages.length;
+    applyBrochureExtraction(extraction, file);
+    callWizardStep = 1;
+    renderCallWizard();
+    toast('Brochure leído localmente. Revisa el borrador antes de continuar.');
+  } catch (error) {
+    options?.classList.remove('is-processing');
+    if (status)
+      status.innerHTML = html`<span class="brochure-status-error">!</span>
+        <div><strong>No se pudo importar</strong><small>${esc(error.message)}</small></div>`;
+    input.value = '';
+  }
 }
 function editCall(id) {
   const source = state.calls.find((call) => call.id === id);
@@ -2714,8 +3016,7 @@ function editCall(id) {
   renderCallWizard();
 }
 function nextAcademicPeriod() {
-  const year = new Date().getFullYear();
-  return `${year + 1}-I`;
+  return academicPeriodForDate();
 }
 function periodOptions(selected) {
   const first = new Date().getFullYear(),
@@ -2723,6 +3024,7 @@ function periodOptions(selected) {
   for (let year = first; year <= first + 5; year += 1) {
     options.push(`${year}-I`, `${year}-II`);
   }
+  if (selected && !options.includes(selected)) options.unshift(selected);
   return options
     .map(
       (period) =>
@@ -2837,7 +3139,37 @@ function renderCallWizard() {
   } else modal(body, 'modal-wizard');
 }
 function wizardInformation() {
-  return html`<p class="wizard-intro">
+  const importMeta = callDraft.importMeta;
+  return html`${
+      importMeta
+        ? html`<aside class="brochure-import-summary">
+            <div class="brochure-import-summary-head">
+              <span>PDF</span>
+              <div>
+                <strong>Brochure importado</strong>
+                <small
+                  >${esc(importMeta.fileName)} · Lectura local sin IA · Confianza
+                  ${
+                    { HIGH: 'alta', MEDIUM: 'media', LOW: 'baja' }[importMeta.confidence] || 'baja'
+                  }</small
+                >
+              </div>
+              <button type="button" onclick="callModal()">Cambiar PDF</button>
+            </div>
+            ${
+              importMeta.warnings.length
+                ? html`<div class="brochure-import-warnings">
+                    <strong>Revisa antes de publicar</strong>
+                    <ul>
+                      ${importMeta.warnings.map((warning) => `<li>${esc(warning)}</li>`).join('')}
+                    </ul>
+                  </div>`
+                : html`<p class="brochure-import-ok">✓ No se detectaron datos ambiguos.</p>`
+            }
+          </aside>`
+        : ''
+    }
+    <p class="wizard-intro">
       El nombre identifica la universidad o convenio. Elige el periodo al costado para mantener el
       título claro y uniforme.
     </p>
@@ -2928,8 +3260,8 @@ function wizardInformation() {
 }
 function wizardGuidelines() {
   return html`<p class="wizard-intro">
-      Pega directamente las viñetas del brochure. Cada línea se convertirá en un requisito; puedes
-      usar •, -, * o escribir una línea por requisito.
+      Cada viñeta representa un requisito completo. Puedes corregir los requisitos importados o
+      pegarlos manualmente usando •, -, * o una línea por requisito.
     </p>
     <div class="field">
       <label>Requisitos generales</label
@@ -2941,7 +3273,7 @@ function wizardGuidelines() {
       >
 ${esc(callDraft.guidelinesText || callDraft.guidelines.map((item) => `• ${item}`).join('\n'))}</textarea
       ><small class="field-help"
-        >Al avanzar se separarán automáticamente en viñetas individuales para la publicación.</small
+        >Revisa que los saltos visuales del brochure no hayan dividido una misma idea.</small
       >
     </div>
     ${wizardActions('Continuar a documentos', 'goCallWizardStep(3)', 'Volver', 'goCallWizardStep(1)')}`;
@@ -3230,17 +3562,14 @@ function selectCallResource(input, index) {
   syncCallDraft();
   const file = input.files?.[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    callDraft.resources[index] = {
-      ...callDraft.resources[index],
-      dataUrl: reader.result,
-      fileName: file.name,
-      storagePath: '',
-    };
-    renderCallWizard();
+  callDraft.resources[index] = {
+    ...callDraft.resources[index],
+    pendingFile: file,
+    dataUrl: '',
+    fileName: file.name,
+    storagePath: '',
   };
-  reader.readAsDataURL(file);
+  renderCallWizard();
 }
 function addDocument() {
   syncCallDraft();
@@ -3277,19 +3606,20 @@ const storageSafeName = (name) => String(name || 'archivo').replace(/[^a-zA-Z0-9
 async function prepareCallAssets() {
   const folder = isUuid(editingCallId) ? editingCallId : crypto.randomUUID();
   if (callDraft.coverImage?.startsWith('data:')) {
-    callDraft.coverImagePath = await uploadDataUrl(
+    callDraft.coverImagePath = await uploadCallAsset(
       callDraft.coverImage,
       `calls/${folder}/cover-${storageSafeName(callDraft.coverName || 'portada')}`,
     );
   }
   callDraft.resources = await Promise.all(
     callDraft.resources.map(async (resource, index) => {
-      if (!resource.dataUrl) return resource;
-      const storagePath = await uploadDataUrl(
-        resource.dataUrl,
+      const source = resource.pendingFile || resource.dataUrl;
+      if (!source) return resource;
+      const storagePath = await uploadCallAsset(
+        source,
         `calls/${folder}/material-${index + 1}-${storageSafeName(resource.fileName)}`,
       );
-      return { ...resource, storagePath, dataUrl: '' };
+      return { ...resource, storagePath, dataUrl: '', pendingFile: null };
     }),
   );
 }
@@ -3310,7 +3640,9 @@ async function saveCallDraft(status) {
       ...callDraft,
       id: edited ? editingCallId : null,
       guidelines: callDraft.guidelines.filter(Boolean),
-      resources: callDraft.resources.map(({ dataUrl, downloadUrl, ...resource }) => resource),
+      resources: callDraft.resources.map(
+        ({ dataUrl, downloadUrl, pendingFile, ...resource }) => resource,
+      ),
       status,
     };
     const { error } = await supabase.rpc('admin_upsert_classified_call', { payload });
@@ -3778,8 +4110,8 @@ function adminStatusFlow() {
         <li><span class="flow-node final">Concluido</span></li>
       </ol>
       <p class="status-flow-note">
-        <strong>Cancelado</strong> es una salida excepcional y OCRI puede restaurar el expediente a
-        la etapa que corresponda.
+        <strong>Cancelado</strong> es una salida excepcional. Desde la nominación, cualquier
+        desistimiento requiere el trámite formal con OCRI.
       </p>
     </div>
   </details>`;
@@ -3807,6 +4139,24 @@ async function changeAppStatus(id) {
     return toast(error?.message || 'No se pudo actualizar el expediente.');
   await refreshLetterView(id);
   toast('Estado del expediente actualizado.');
+}
+async function withdrawStudentApplication(id) {
+  const application = state.applications.find((item) => item.id === id);
+  if (!application || !canStudentWithdrawApplication(application))
+    return toast('Esta postulación ya no puede retirarse directamente.');
+  if (
+    !confirm(
+      '¿Deseas retirar esta postulación? Esta acción la cerrará y quedará registrada en tu historial.',
+    )
+  )
+    return;
+  const { error } = await supabase.rpc('student_withdraw_postulated_application', {
+    target_application_id: id,
+  });
+  if (error) return toast(error.message);
+  await loadApplicationsFromDatabase();
+  render();
+  toast('Tu postulación fue retirada y permanece en tu historial.');
 }
 function reviewModal(id, index) {
   const a = state.applications.find((x) => x.id === id),
@@ -4459,9 +4809,12 @@ Object.assign(window, {
   signOut,
   go,
   callModal,
+  startManualCall,
+  analyzeCallBrochure,
   editCall,
   goCallWizardStep,
   changeCallDirection,
+  changeCallActivityType,
   selectCallCover,
   selectCallResource,
   addDocument,
@@ -4478,12 +4831,14 @@ Object.assign(window, {
   openOperationalQueue,
   filterOperationalQueue,
   detailModal,
+  applicantHistoryModal,
   viewApplicationDocument,
   uploadAcceptanceLetter,
   downloadAcceptanceLetter,
   reviewAcceptanceLetter,
   nominateApplication,
   changeAppStatus,
+  withdrawStudentApplication,
   updateStatusExplanation,
   reviewModal,
   saveReview,

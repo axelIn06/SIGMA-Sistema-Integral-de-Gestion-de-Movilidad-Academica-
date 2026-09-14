@@ -1891,6 +1891,198 @@ textarea.input {
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
+.modal.modal-brochure {
+  width: min(920px, 100%);
+  padding: 0;
+  overflow: hidden;
+}
+.brochure-start {
+  position: relative;
+  padding: 34px clamp(24px, 5vw, 54px) 38px;
+  background:
+    radial-gradient(circle at 100% 0, rgba(199, 160, 82, 0.18), transparent 35%), var(--surface);
+}
+.brochure-start-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100% - 150px);
+  color: var(--maroon);
+}
+.brochure-start-brand strong {
+  font-family: Georgia, serif;
+  font-size: 23px;
+  letter-spacing: 0.08em;
+}
+.brochure-start-brand span {
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+.brochure-start > .wizard-exit {
+  position: absolute;
+  top: 26px;
+  right: 28px;
+}
+.brochure-start-copy {
+  max-width: 650px;
+  margin: 54px 0 26px;
+}
+.brochure-start-copy h2 {
+  margin: 7px 0 9px;
+  color: var(--ink);
+  font-size: clamp(28px, 4vw, 40px);
+  letter-spacing: -0.045em;
+}
+.brochure-start-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.brochure-start-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+}
+.brochure-option {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 15px;
+  min-height: 170px;
+  padding: 23px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: #fffdfa;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+.brochure-option:hover {
+  transform: translateY(-2px);
+  border-color: var(--gold);
+  box-shadow: 0 14px 30px rgba(53, 17, 29, 0.1);
+}
+.brochure-option-primary {
+  border-color: rgba(199, 160, 82, 0.75);
+  background: linear-gradient(145deg, #fffaf0, #fffdfa);
+}
+.brochure-option-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--maroon);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+}
+.brochure-option-icon-manual {
+  background: #f0e0e3;
+  color: var(--maroon);
+  font-size: 25px;
+  font-weight: 500;
+}
+.brochure-option > span:nth-child(2) {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+.brochure-option strong {
+  font-size: 16px;
+}
+.brochure-option small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.brochure-option-action {
+  grid-column: 2;
+  align-self: end;
+  color: var(--maroon);
+  font-size: 12px;
+  font-weight: 800;
+}
+.brochure-start-options.is-processing {
+  pointer-events: none;
+  opacity: 0.48;
+}
+.brochure-start-note,
+.brochure-import-status {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: 18px;
+  padding: 13px 15px;
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+.brochure-start-note > span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #e3f2e8;
+  color: #287442;
+  font-weight: 850;
+}
+.brochure-start-note p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.brochure-import-status:empty {
+  display: none;
+}
+.brochure-import-status {
+  border: 1px solid rgba(199, 160, 82, 0.42);
+  background: #fff9eb;
+}
+.brochure-import-status > div {
+  display: grid;
+  gap: 3px;
+}
+.brochure-import-status small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.brochure-spinner {
+  width: 23px;
+  height: 23px;
+  flex: 0 0 auto;
+  border: 3px solid rgba(110, 29, 54, 0.18);
+  border-top-color: var(--maroon);
+  border-radius: 50%;
+  animation: brochure-spin 0.8s linear infinite;
+}
+.brochure-status-error {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #fdebed;
+  color: var(--bad);
+  font-weight: 850;
+}
+@keyframes brochure-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .modal-wizard {
   width: min(1120px, 100%);
   max-height: 94vh;
@@ -2255,6 +2447,70 @@ textarea.input {
   color: var(--muted);
   font-size: 14px;
   line-height: 1.6;
+}
+.brochure-import-summary {
+  display: grid;
+  gap: 12px;
+  max-width: 760px;
+  padding: 15px;
+  margin-bottom: 22px;
+  border: 1px solid rgba(199, 160, 82, 0.52);
+  border-radius: 14px;
+  background: #fffaf0;
+}
+.brochure-import-summary-head {
+  display: grid;
+  align-items: center;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  gap: 11px;
+}
+.brochure-import-summary-head > span {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--maroon);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 850;
+}
+.brochure-import-summary-head > div {
+  display: grid;
+  gap: 3px;
+}
+.brochure-import-summary-head small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.brochure-import-summary-head button {
+  border: 0;
+  background: transparent;
+  color: var(--maroon);
+  font-size: 11px;
+  font-weight: 800;
+}
+.brochure-import-warnings {
+  padding: 12px 13px;
+  border-radius: 10px;
+  background: #fff1c9;
+  color: #674b09;
+}
+.brochure-import-warnings > strong {
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.brochure-import-warnings ul {
+  margin: 7px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.brochure-import-ok {
+  margin: 0;
+  color: #287442;
+  font-size: 11px;
+  font-weight: 750;
 }
 .information-layout {
   display: grid;
@@ -3337,6 +3593,42 @@ textarea.input {
 }
 
 @media (max-width: 760px) {
+  .modal.modal-brochure {
+    min-height: 100vh;
+    border: 0;
+    border-radius: 0;
+  }
+  .brochure-start {
+    min-height: 100vh;
+    padding: 24px 18px 30px;
+  }
+  .brochure-start-brand {
+    max-width: 170px;
+  }
+  .brochure-start-brand span {
+    display: none;
+  }
+  .brochure-start > .wizard-exit {
+    top: 18px;
+    right: 18px;
+  }
+  .brochure-start-copy {
+    margin-top: 58px;
+  }
+  .brochure-start-options {
+    grid-template-columns: 1fr;
+  }
+  .brochure-option {
+    min-height: 146px;
+  }
+  .brochure-import-summary-head {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+  .brochure-import-summary-head button {
+    grid-column: 2;
+    justify-self: start;
+    padding: 0;
+  }
   .modal.application-detail-dialog {
     width: 100%;
     max-height: 100vh;
