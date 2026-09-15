@@ -56,8 +56,8 @@ const STATUS_LABELS = {
   APROBADO: 'Aprobado',
   RECHAZADO: 'Rechazado',
   ENVIADA: 'Postulado',
-  OBSERVADA: 'Subsanación pendiente',
-  APROBADA_OCRI: 'Aprobado por OCRI',
+  OBSERVADA: 'Subsanación requerida',
+  APROBADA_OCRI: 'Listo para nominación',
   FINALIZADA: 'Concluido',
   BORRADOR: 'Borrador',
   POSTULADO: 'Postulado',
@@ -66,15 +66,16 @@ const STATUS_LABELS = {
   OBSERVADO: 'Subsanación pendiente',
   APROBADO_OCRI: 'Aprobado por OCRI',
   NOMINADO: 'Nominado',
-  NOMINADO_UNSAAC: 'Nominado por UNSAAC',
-  EN_EVALUACION_DESTINO: 'En evaluación por destino',
-  CARTA_PENDIENTE: 'Carta pendiente',
+  NOMINADO_UNSAAC: 'Nominado · espera respuesta de destino',
+  EN_EVALUACION_DESTINO: 'Nominado · espera respuesta de destino',
+  CARTA_PENDIENTE: 'Nominado · espera respuesta de destino',
   VALIDADO_ORIGEN: 'Validado por universidad de origen',
   ACEPTADO: 'Aceptado',
   NO_ADMITIDO_UNSAAC: 'No admitido por UNSAAC',
   NO_ADMITIDO: 'No admitido',
   NO_ACEPTADO_DESTINO: 'No aceptado por universidad destino',
   EN_MOVILIDAD: 'En movilidad',
+  DOCUMENTACION_RETORNO: 'Documentación de retorno pendiente',
   CONCLUIDO: 'Concluido',
   FINALIZADO: 'Concluido',
   RECHAZADA: 'Rechazado',
@@ -85,20 +86,22 @@ const STATUS_DESCRIPTIONS = {
   BORRADOR: 'La postulación existe, pero todavía no fue enviada a OCRI.',
   ENVIADA: 'El estudiante envió su expediente y OCRI puede iniciar la revisión.',
   EN_REVISION_DOCUMENTAL: 'OCRI revisa los datos y documentos del expediente.',
-  OBSERVADA: 'OCRI solicitó corregir o completar información antes de continuar.',
-  OBSERVADO: 'Hay una observación pendiente de corrección antes de continuar.',
-  APROBADA_OCRI: 'OCRI aprobó el expediente; queda listo para registrar la nominación.',
-  NOMINADO_UNSAAC: 'UNSAAC comunicó formalmente la nominación a la universidad de destino.',
-  EN_EVALUACION_DESTINO: 'La universidad de destino evalúa la postulación y sus requisitos.',
-  CARTA_PENDIENTE:
-    'La universidad de destino emitirá la carta; el estudiante debe cargar el PDF para que OCRI lo valide.',
+  OBSERVADA: 'OCRI solicitó una subsanación. El estudiante corrige y la devuelve a revisión.',
+  OBSERVADO: 'Hay una subsanación pendiente de corrección antes de continuar.',
+  APROBADA_OCRI: 'Estado heredado: el expediente está listo para ser nominado por OCRI.',
+  NOMINADO_UNSAAC:
+    'OCRI comunicó la nominación a la universidad de destino; se espera su respuesta.',
+  EN_EVALUACION_DESTINO: 'Estado heredado de espera de respuesta de la universidad de destino.',
+  CARTA_PENDIENTE: 'Estado heredado de espera de respuesta de la universidad de destino.',
   NO_ACEPTADO_DESTINO:
     'La universidad de destino no aceptó la postulación. Este resultado es definitivo para la convocatoria.',
-  ACEPTADO: 'La carta de aceptación fue validada y el estudiante puede continuar el trámite.',
+  ACEPTADO: 'El estudiante cargó la carta de aceptación y puede continuar el trámite.',
   EN_MOVILIDAD: 'El periodo de movilidad académica ya está en curso.',
+  DOCUMENTACION_RETORNO:
+    'Al retornar, el estudiante debe cargar su convalidación de cursos y certificado de estudios para el cierre.',
   FINALIZADA: 'La movilidad académica concluyó.',
   RECHAZADA:
-    'OCRI rechazó el expediente. La postulación queda cerrada y permanece visible en el historial.',
+    'El postulante no es apto para esta convocatoria. El motivo queda registrado en el historial.',
   CANCELADO: 'La postulación fue retirada o cancelada y permanece visible en el historial.',
   INVITACION_ENVIADA:
     'La universidad de origen recibió la invitación para que el estudiante complete el proceso.',
@@ -252,7 +255,7 @@ async function loadApplicationsFromDatabase() {
   const { data, error } = await supabase
     .from('applications')
     .select(
-      'id,call_id,applicant_id,status,student_code,faculty,academic_program,submitted_at,created_at,calls(title,direction,period,activity_type,mobility_scope),profiles!applications_applicant_id_fkey(full_name,email,photo_path,phone,address,universities(name)),application_documents(id,requirement_id,requirement_title,is_required,storage_path,file_name,status,reviewer_comment)',
+      'id,call_id,applicant_id,status,status_note,student_code,faculty,academic_program,submitted_at,created_at,calls(title,direction,period,activity_type,mobility_scope),profiles!applications_applicant_id_fkey(full_name,email,photo_path,phone,address,universities(name)),application_documents(id,requirement_id,requirement_title,is_required,storage_path,file_name,status,reviewer_comment),mobility_return_documents(id,document_type,storage_path,file_name,status,reviewer_comment,validated_credits)',
     )
     .order('updated_at', { ascending: false });
 
@@ -269,7 +272,7 @@ async function loadApplicationsFromDatabase() {
       ? supabase
           .from('application_status_history')
           .select(
-            'application_id,status,changed_at,profiles!application_status_history_changed_by_fkey(full_name)',
+            'application_id,status,note,changed_at,profiles!application_status_history_changed_by_fkey(full_name)',
           )
           .in('application_id', applicationIds)
           .order('changed_at', { ascending: true })
@@ -327,6 +330,7 @@ async function loadApplicationsFromDatabase() {
       destination: application.calls?.title || 'Convocatoria',
       callTitle: application.calls?.title || 'Convocatoria',
       status: application.status,
+      statusNote: application.status_note || '',
       submitted: date ? shortDate(String(date).slice(0, 10)) : 'Borrador',
       progress,
       documents: documents.map((document) => ({
@@ -339,10 +343,12 @@ async function loadApplicationsFromDatabase() {
         status: document.status,
         reviewerComment: document.reviewer_comment || '',
       })),
+      returnDocuments: application.mobility_return_documents || [],
       history: (statusHistory || [])
         .filter((entry) => entry.application_id === application.id)
         .map((entry) => ({
           status: entry.status,
+          note: entry.note || '',
           changedAt: entry.changed_at,
           changedBy: entry.profiles?.full_name || 'Sistema SIGMA',
         })),
@@ -440,6 +446,7 @@ function applicationHistoryTimeline(application) {
                 >
               </div>
               <p>${esc(fullDateTime(entry.changedAt))} · ${esc(entry.changedBy)}</p>
+              ${entry.note ? `<p class="muted">${esc(entry.note)}</p>` : ''}
             </div>
           </div>`,
       )
@@ -3919,8 +3926,103 @@ function acceptanceLetterSection(a) {
     }
     ${canStudentUpload || canOcriUpload ? html`<label class="btn btn-primary">${a.letter ? 'Reemplazar carta PDF' : 'Subir carta PDF'}<input type="file" class="visually-hidden" accept="application/pdf" onchange="uploadAcceptanceLetter('${a.id}',this)" /></label>` : ''}
     ${canValidate ? html`<button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',true)">Validar aceptación</button><button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',false)">Solicitar corrección</button>` : ''}
-    ${admin && a.direction === 'SALIENTE' && a.status === 'APROBADA_OCRI' ? html`<button class="btn btn-primary" onclick="nominateApplication('${a.id}')">Registrar nominación UNSAAC</button>` : ''}
   </section>`;
+}
+function returnDocumentationSection(a) {
+  if (a.direction !== 'SALIENTE' || !['DOCUMENTACION_RETORNO', 'FINALIZADA'].includes(a.status))
+    return '';
+  const labels = {
+    CONVALIDACION_CURSOS: 'Convalidación de cursos',
+    CERTIFICADO_ESTUDIOS: 'Certificado de estudios de destino',
+  };
+  const documents = Object.keys(labels).map((kind) =>
+    a.returnDocuments?.find((document) => document.document_type === kind),
+  );
+  const canConclude = documents.every(
+    (document, index) =>
+      document?.status === 'VALIDADA' && (index || Number(document.validated_credits) >= 12),
+  );
+  return html`<section class="card operational-section">
+    <h3>Documentación de retorno</h3>
+    <p>
+      Para concluir la movilidad se requiere la convalidación de cursos (mínimo 12 créditos) y el
+      certificado de estudios.
+    </p>
+    ${Object.entries(labels)
+      .map(([kind, label], index) => {
+        const document = documents[index];
+        return html`<div class="doc-item">
+          <div class="doc-icon">PDF</div>
+          <div class="doc-main">
+            <strong>${label}</strong
+            ><small
+              >${document?.file_name || 'Pendiente de adjuntar'}${kind === 'CONVALIDACION_CURSOS' && document?.validated_credits != null ? ` · ${document.validated_credits} créditos validados` : ''}</small
+            >
+          </div>
+          ${document ? badge(document.status) : badge('PENDIENTE')}${document?.storage_path ? html`<button class="btn btn-sm btn-soft" onclick="downloadReturnDocument('${a.id}','${kind}')">Ver archivo</button>` : ''}${session.role === 'student' && a.status === 'DOCUMENTACION_RETORNO' ? html`<label class="btn btn-sm btn-primary">${document ? 'Reemplazar' : 'Subir PDF'}<input class="visually-hidden" type="file" accept="application/pdf" onchange="uploadReturnDocument('${a.id}','${kind}',this)" /></label>` : ''}${session.role === 'admin' && a.status === 'DOCUMENTACION_RETORNO' && document ? html`<button class="btn btn-sm btn-soft" onclick="reviewReturnDocument('${a.id}','${kind}',true)">Validar</button><button class="btn btn-sm btn-soft" onclick="reviewReturnDocument('${a.id}','${kind}',false)">Observar</button>` : ''}
+        </div>`;
+      })
+      .join('')}
+    ${session.role === 'admin' && a.status === 'DOCUMENTACION_RETORNO' ? html`<button class="btn btn-primary" ${canConclude ? '' : 'disabled'} onclick="concludeMobility('${a.id}')">Concluir expediente</button>` : ''}
+  </section>`;
+}
+async function uploadReturnDocument(id, kind, input) {
+  const file = input.files?.[0];
+  if (!file || file.type !== 'application/pdf' || file.size > 10485760)
+    return toast('Selecciona un PDF de hasta 10 MB.');
+  try {
+    const path = `${id}/${kind}/${crypto.randomUUID()}.pdf`;
+    const { error: uploadError } = await supabase.storage
+      .from('mobility-return-documents')
+      .upload(path, file);
+    if (uploadError) throw uploadError;
+    const { error } = await supabase.rpc('save_mobility_return_document', {
+      target: id,
+      kind,
+      path,
+      filename: file.name,
+    });
+    if (error) throw error;
+    await refreshLetterView(id);
+    toast('Documento de retorno enviado a OCRI.');
+  } catch (error) {
+    toast(error.message);
+  }
+}
+async function downloadReturnDocument(id, kind) {
+  const document = state.applications
+    .find((application) => application.id === id)
+    ?.returnDocuments?.find((item) => item.document_type === kind);
+  if (!document?.storage_path) return toast('El documento todavía no fue cargado.');
+  const { data, error } = await supabase.storage
+    .from('mobility-return-documents')
+    .download(document.storage_path);
+  if (error) return toast(error.message);
+  const url = URL.createObjectURL(data);
+  window.open(url, '_blank', 'noopener,noreferrer');
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+async function reviewReturnDocument(id, kind, approved) {
+  const feedback = approved ? '' : prompt('Indica la observación:');
+  if (feedback === null) return;
+  const credits =
+    kind === 'CONVALIDACION_CURSOS' && approved ? prompt('Créditos convalidados:') : null;
+  if (credits === null && kind === 'CONVALIDACION_CURSOS' && approved) return;
+  const { error } = await supabase.rpc('review_mobility_return_document', {
+    target: id,
+    kind,
+    approved,
+    feedback: feedback || '',
+    credits: credits === null ? null : Number(credits),
+  });
+  if (error) return toast(error.message);
+  await refreshLetterView(id);
+}
+async function concludeMobility(id) {
+  const { error } = await supabase.rpc('conclude_mobility_application', { target: id });
+  if (error) return toast(error.message);
+  await refreshLetterView(id);
+  toast('Expediente concluido.');
 }
 async function refreshLetterView(id) {
   await loadApplicationsFromDatabase();
@@ -3999,7 +4101,7 @@ function detailModal(id) {
         </div>
         <button class="modal-close" onclick="closeModal()">×</button>
       </div>
-      ${applicationDetail(a)}${acceptanceLetterSection(a)}${
+      ${applicationDetail(a)}${acceptanceLetterSection(a)}${returnDocumentationSection(a)}${
         session.role === 'admin'
           ? a.status === 'FINALIZADA' || a.status === 'CONCLUIDO' || a.status === 'FINALIZADO'
             ? html`<section class="application-concluded-note">
@@ -4039,11 +4141,11 @@ function applicationStatusOptions(application) {
   const routes = {
     BORRADOR: ['BORRADOR', 'ENVIADA'],
     ENVIADA: ['ENVIADA', 'EN_REVISION_DOCUMENTAL'],
-    EN_REVISION_DOCUMENTAL: ['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'RECHAZADA', 'APROBADA_OCRI'],
+    EN_REVISION_DOCUMENTAL: ['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'RECHAZADA', 'NOMINADO_UNSAAC'],
     OBSERVADA: ['OBSERVADA', 'EN_REVISION_DOCUMENTAL'],
     RECHAZADA: ['RECHAZADA'],
-    APROBADA_OCRI: ['APROBADA_OCRI', 'CANCELADO'],
-    NOMINADO_UNSAAC: ['NOMINADO_UNSAAC', 'EN_EVALUACION_DESTINO', 'CANCELADO'],
+    APROBADA_OCRI: ['APROBADA_OCRI', 'NOMINADO_UNSAAC', 'CANCELADO'],
+    NOMINADO_UNSAAC: ['NOMINADO_UNSAAC', 'NO_ACEPTADO_DESTINO', 'CANCELADO'],
     EN_EVALUACION_DESTINO: [
       'EN_EVALUACION_DESTINO',
       'NO_ACEPTADO_DESTINO',
@@ -4058,7 +4160,8 @@ function applicationStatusOptions(application) {
     ],
     NO_ACEPTADO_DESTINO: ['NO_ACEPTADO_DESTINO'],
     ACEPTADO: ['ACEPTADO', 'EN_MOVILIDAD', 'CANCELADO'],
-    EN_MOVILIDAD: ['EN_MOVILIDAD', 'FINALIZADA', 'CANCELADO'],
+    EN_MOVILIDAD: ['EN_MOVILIDAD', 'DOCUMENTACION_RETORNO', 'CANCELADO'],
+    DOCUMENTACION_RETORNO: ['DOCUMENTACION_RETORNO'],
     CANCELADO: [
       'EN_REVISION_DOCUMENTAL',
       'APROBADA_OCRI',
@@ -4094,19 +4197,23 @@ function adminStatusFlow() {
             <span class="flow-branch stopped">Rechazado</span>
           </div>
         </li>
-        <li><span class="flow-node approved">Aprobado por OCRI</span></li>
         <li><span class="flow-node nomination">Nominado por UNSAAC</span></li>
         <li class="has-branches">
-          <span class="flow-node review">En evaluación por universidad destino</span>
+          <span class="flow-node review">En espera de respuesta de destino</span>
           <div class="flow-branches">
             <span class="flow-branch stopped">No aceptado por destino</span>
             <span class="flow-branch letter"
-              >Carta pendiente <small>estudiante sube PDF → OCRI valida</small></span
+              >Carta recibida <small>estudiante sube PDF → Aceptado</small></span
             >
           </div>
         </li>
         <li><span class="flow-node accepted">Aceptado</span></li>
         <li><span class="flow-node mobility">En movilidad</span></li>
+        <li>
+          <span class="flow-node review"
+            >Documentación de retorno <small>convalidación + certificado</small></span
+          >
+        </li>
         <li><span class="flow-node final">Concluido</span></li>
       </ol>
       <p class="status-flow-note">
@@ -4130,9 +4237,14 @@ async function changeAppStatus(id) {
   if (session.role !== 'admin') return;
   const status = $('#appStatus')?.value;
   if (!status) return;
+  const needsNote = ['OBSERVADA', 'RECHAZADA', 'NO_ACEPTADO_DESTINO'].includes(status);
+  const note = needsNote
+    ? prompt('Registra el motivo o indicación para el historial (opcional):')
+    : '';
+  if (note === null) return;
   const { data, error } = await supabase
     .from('applications')
-    .update({ status })
+    .update({ status, status_note: String(note || '').trim() })
     .eq('id', id)
     .select('id');
   if (error || !data?.length)
@@ -4323,7 +4435,7 @@ async function startApplication(callId) {
   const existing = state.applications.find(
     (item) => item.callId === callId && item.applicantId === session.userId,
   );
-  if (existing && existing.status !== 'BORRADOR') {
+  if (existing && !['BORRADOR', 'OBSERVADA'].includes(existing.status)) {
     openExistingApplication(existing.id);
     if (/RECHAZAD|NO_ACEPTADO/.test(existing.status))
       toast(
@@ -4372,7 +4484,8 @@ function openExistingApplication(applicationId) {
   closeModal();
   const application = state.applications.find((item) => item.id === applicationId);
   if (!application) return toast('No se encontró la postulación.');
-  if (application.status === 'BORRADOR') return startApplication(application.callId);
+  if (['BORRADOR', 'OBSERVADA'].includes(application.status))
+    return startApplication(application.callId);
   detailModal(applicationId);
 }
 
@@ -4613,16 +4726,21 @@ function selectApplicationDocument(input, requirementId) {
 
 async function persistApplicationDraft() {
   syncApplicationDraft();
-  const { data: applicationId, error } = await supabase.rpc('student_save_application_draft', {
-    payload: {
-      callId: applicationDraft.callId,
-      facultyCode: applicationDraft.facultyCode,
-      schoolCode: applicationDraft.schoolCode,
-    },
-  });
-  if (error) {
-    toast(`No se pudo guardar el borrador: ${error.message}`);
-    return false;
+  const correction = applicationDraft.status === 'OBSERVADA';
+  let applicationId = applicationDraft.id;
+  if (!correction) {
+    const { data, error } = await supabase.rpc('student_save_application_draft', {
+      payload: {
+        callId: applicationDraft.callId,
+        facultyCode: applicationDraft.facultyCode,
+        schoolCode: applicationDraft.schoolCode,
+      },
+    });
+    if (error) {
+      toast(`No se pudo guardar el borrador: ${error.message}`);
+      return false;
+    }
+    applicationId = data;
   }
 
   for (const [requirementId, file] of pendingApplicationFiles) {
@@ -4651,6 +4769,15 @@ async function persistApplicationDraft() {
       await supabase.storage.from('application-documents').remove([previousDocument.storagePath]);
   }
   pendingApplicationFiles.clear();
+  if (correction) {
+    const { error } = await supabase.rpc('student_resubmit_observed_application', {
+      target_application_id: applicationId,
+    });
+    if (error) {
+      toast(error.message);
+      return false;
+    }
+  }
   await loadApplicationsFromDatabase();
   const saved = state.applications.find((item) => item.id === applicationId);
   if (saved) {
@@ -4672,8 +4799,16 @@ async function submitStudentApplication() {
   syncApplicationDraft();
   if (!applicationDraft.facultyCode || !applicationDraft.schoolCode)
     return toast('Selecciona tu facultad y escuela profesional.');
+  const correction = applicationDraft.status === 'OBSERVADA';
   const saved = await persistApplicationDraft();
   if (!saved) return;
+  if (correction) {
+    await loadApplicationsFromDatabase();
+    closeModal();
+    route = 'sgms';
+    render();
+    return toast('Subsanación enviada nuevamente a OCRI.');
+  }
   const { error } = await supabase.rpc('student_submit_application', {
     target_application_id: applicationDraft.id,
   });
@@ -4836,7 +4971,10 @@ Object.assign(window, {
   uploadAcceptanceLetter,
   downloadAcceptanceLetter,
   reviewAcceptanceLetter,
-  nominateApplication,
+  uploadReturnDocument,
+  downloadReturnDocument,
+  reviewReturnDocument,
+  concludeMobility,
   changeAppStatus,
   withdrawStudentApplication,
   updateStatusExplanation,
