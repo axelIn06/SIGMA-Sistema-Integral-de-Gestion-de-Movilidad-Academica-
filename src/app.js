@@ -447,7 +447,7 @@ function applicationHistoryTimeline(application) {
                 >
               </div>
               <p>${esc(fullDateTime(entry.changedAt))}</p>
-              ${entry.note ? `<p class="muted">${esc(entry.note)}</p>` : ''}
+              ${entry.status === 'OBSERVADA' && entry.note ? `<p class="muted">${esc(entry.note)}</p>` : ''}
             </div>
           </div>`,
       )
@@ -3932,6 +3932,11 @@ function acceptanceLetterSection(a) {
 function returnDocumentationSection(a) {
   if (a.direction !== 'SALIENTE' || !['DOCUMENTACION_RETORNO', 'FINALIZADA'].includes(a.status))
     return '';
+  if (a.status === 'FINALIZADA')
+    return html`<section class="card application-concluded-note">
+      <strong>Expediente concluido satisfactoriamente</strong>
+      <span>OCRI validó la convalidación de cursos y el certificado de estudios.</span>
+    </section>`;
   const labels = {
     CONVALIDACION_CURSOS: 'Convalidación de cursos',
     CERTIFICADO_ESTUDIOS: 'Certificado de estudios de destino',
@@ -3944,7 +3949,9 @@ function returnDocumentationSection(a) {
       document?.status === 'VALIDADA' && (index || Number(document.validated_credits) >= 12),
   );
   return html`<section class="card operational-section">
-    <h3>Documentación de retorno</h3>
+    <h3>
+      ${session.role === 'student' ? 'Tu documentación obligatoria de retorno' : 'Documentación de retorno'}
+    </h3>
     <p>
       Para concluir la movilidad se requiere la convalidación de cursos (mínimo 12 créditos) y el
       certificado de estudios.
@@ -3964,7 +3971,7 @@ function returnDocumentationSection(a) {
         </div>`;
       })
       .join('')}
-    ${session.role === 'admin' && a.status === 'DOCUMENTACION_RETORNO' ? html`<button class="btn btn-primary" ${canConclude ? '' : 'disabled'} onclick="concludeMobility('${a.id}')">Concluir expediente</button>` : ''}
+    ${session.role === 'admin' && a.status === 'DOCUMENTACION_RETORNO' ? html`<button class="btn btn-primary" ${canConclude ? '' : 'disabled'} onclick="concludeMobility('${a.id}')">Concluir expediente satisfactoriamente</button>` : ''}
   </section>`;
 }
 async function uploadReturnDocument(id, kind, input) {
@@ -4023,7 +4030,7 @@ async function concludeMobility(id) {
   const { error } = await supabase.rpc('conclude_mobility_application', { target: id });
   if (error) return toast(error.message);
   await refreshLetterView(id);
-  toast('Expediente concluido.');
+  toast('Expediente concluido satisfactoriamente.');
 }
 async function refreshLetterView(id) {
   await loadApplicationsFromDatabase();
@@ -4191,8 +4198,12 @@ function adminStatusFlow() {
         ${statusFlowCard('stopped', 'No apto', 'No cumple un requisito de la convocatoria. OCRI puede dejar el motivo; permanece en el historial.')}
         ${statusFlowCard('nomination', 'Nominado por UNSAAC', 'OCRI remite la nominación. Se espera la respuesta de la universidad de destino.')}
       </div>
-      <div class="status-flow-track status-flow-continuation">
+      <div class="flow-decision-heading">Respuesta de la universidad de destino</div>
+      <div class="status-flow-resolution">
         ${statusFlowCard('letter', 'Carta por validar', 'El estudiante carga el PDF de aceptación. OCRI verifica que sea válido antes de decidir.')}
+        ${statusFlowCard('stopped', 'No aceptado', 'La universidad de destino no aceptó la postulación. OCRI registra este resultado final.')}
+      </div>
+      <div class="status-flow-track status-flow-continuation">
         ${statusFlowCard('accepted', 'Aceptado', 'OCRI validó la carta de aceptación y confirmó el expediente.')}
         ${statusFlowCard('mobility', 'En movilidad', 'La estancia académica ya comenzó en el periodo correspondiente.')}
         ${statusFlowCard('review', 'Documentación de retorno', 'Al volver, se exige convalidación de cursos y certificado de estudios.')}

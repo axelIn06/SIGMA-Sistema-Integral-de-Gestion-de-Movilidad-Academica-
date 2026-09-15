@@ -1522,8 +1522,13 @@ textarea:focus-visible {
   gap: 9px;
 }
 .status-flow-continuation {
-  grid-template-columns: repeat(5, minmax(118px, 1fr));
+  grid-template-columns: repeat(4, minmax(118px, 1fr));
   margin-top: 13px;
+}
+.status-flow-resolution {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 3fr);
+  gap: 9px;
 }
 .flow-card {
   min-height: 74px;
