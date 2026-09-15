@@ -1802,6 +1802,7 @@ function studentApplicationDetailView(application) {
         }
       </section>
       ${studentWithdrawalGuidance(application)} ${acceptanceLetterSection(application)}
+      ${returnDocumentationSection(application)}
       <section class="card student-detail-section">
         <div class="student-detail-heading">
           <div>
