@@ -61,14 +61,14 @@ const STATUS_LABELS = {
   FINALIZADA: 'Concluido',
   BORRADOR: 'Borrador',
   POSTULADO: 'Postulado',
-  EN_REVISION_DOCUMENTAL: 'En revisión OCRI',
+  EN_REVISION_DOCUMENTAL: 'Postulado',
   EN_REVISION_OCRI: 'En revisión OCRI',
   OBSERVADO: 'Subsanación pendiente',
   APROBADO_OCRI: 'Aprobado por OCRI',
   NOMINADO: 'Nominado',
   NOMINADO_UNSAAC: 'Nominado · espera respuesta de destino',
   EN_EVALUACION_DESTINO: 'Nominado · espera respuesta de destino',
-  CARTA_PENDIENTE: 'Nominado · espera respuesta de destino',
+  CARTA_PENDIENTE: 'Carta de aceptación por validar',
   VALIDADO_ORIGEN: 'Validado por universidad de origen',
   ACEPTADO: 'Aceptado',
   NO_ADMITIDO_UNSAAC: 'No admitido por UNSAAC',
@@ -85,14 +85,15 @@ const STATUS_LABELS = {
 const STATUS_DESCRIPTIONS = {
   BORRADOR: 'La postulación existe, pero todavía no fue enviada a OCRI.',
   ENVIADA: 'El estudiante envió su expediente y OCRI puede iniciar la revisión.',
-  EN_REVISION_DOCUMENTAL: 'OCRI revisa los datos y documentos del expediente.',
+  EN_REVISION_DOCUMENTAL: 'Estado heredado; OCRI debe decidir directamente desde Postulado.',
   OBSERVADA: 'OCRI solicitó una subsanación. El estudiante corrige y la devuelve a revisión.',
   OBSERVADO: 'Hay una subsanación pendiente de corrección antes de continuar.',
   APROBADA_OCRI: 'Estado heredado: el expediente está listo para ser nominado por OCRI.',
   NOMINADO_UNSAAC:
     'OCRI comunicó la nominación a la universidad de destino; se espera su respuesta.',
   EN_EVALUACION_DESTINO: 'Estado heredado de espera de respuesta de la universidad de destino.',
-  CARTA_PENDIENTE: 'Estado heredado de espera de respuesta de la universidad de destino.',
+  CARTA_PENDIENTE:
+    'El estudiante cargó la carta. OCRI debe verificarla antes de confirmar la aceptación.',
   NO_ACEPTADO_DESTINO:
     'La universidad de destino no aceptó la postulación. Este resultado es definitivo para la convocatoria.',
   ACEPTADO: 'El estudiante cargó la carta de aceptación y puede continuar el trámite.',
@@ -3913,7 +3914,7 @@ function acceptanceLetterSection(a) {
       Carta de aceptación · ${a.direction === 'SALIENTE' ? 'Universidad de destino' : 'UNSAAC'}
     </h3>
     <p>
-      ${isOutgoing ? 'La carta se habilita solo después de que OCRI registre la nominación UNSAAC. El estudiante la adjunta cuando la universidad de destino la emite.' : 'OCRI adjunta la carta de aceptación emitida por la UNSAAC cuando el expediente entrante sea admitido.'}
+      ${isOutgoing ? 'Luego de la nominación, el estudiante adjunta la carta emitida por la universidad de destino. OCRI debe validarla antes de aceptar el expediente.' : 'OCRI adjunta la carta de aceptación emitida por la UNSAAC cuando el expediente entrante sea admitido.'}
     </p>
     ${
       a.letter
@@ -3922,7 +3923,7 @@ function acceptanceLetterSection(a) {
             <button class="btn btn-soft" onclick="downloadAcceptanceLetter('${a.id}')">
               Descargar carta
             </button>`
-        : `<p class="muted">${isNominated ? 'Esperando carta de aceptación de la universidad de destino.' : 'Aún no corresponde cargar una carta en esta etapa.'}</p>`
+        : `<p class="muted">${isNominated ? 'Esperando la carta de aceptación de la universidad de destino.' : 'Aún no corresponde cargar una carta en esta etapa.'}</p>`
     }
     ${canStudentUpload || canOcriUpload ? html`<label class="btn btn-primary">${a.letter ? 'Reemplazar carta PDF' : 'Subir carta PDF'}<input type="file" class="visually-hidden" accept="application/pdf" onchange="uploadAcceptanceLetter('${a.id}',this)" /></label>` : ''}
     ${canValidate ? html`<button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',true)">Validar aceptación</button><button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',false)">Solicitar corrección</button>` : ''}
@@ -4140,9 +4141,9 @@ function detailModal(id) {
 function applicationStatusOptions(application) {
   const routes = {
     BORRADOR: ['BORRADOR', 'ENVIADA'],
-    ENVIADA: ['ENVIADA', 'EN_REVISION_DOCUMENTAL'],
+    ENVIADA: ['ENVIADA', 'OBSERVADA', 'RECHAZADA', 'NOMINADO_UNSAAC'],
     EN_REVISION_DOCUMENTAL: ['EN_REVISION_DOCUMENTAL', 'OBSERVADA', 'RECHAZADA', 'NOMINADO_UNSAAC'],
-    OBSERVADA: ['OBSERVADA', 'EN_REVISION_DOCUMENTAL'],
+    OBSERVADA: ['OBSERVADA', 'ENVIADA'],
     RECHAZADA: ['RECHAZADA'],
     APROBADA_OCRI: ['APROBADA_OCRI', 'NOMINADO_UNSAAC', 'CANCELADO'],
     NOMINADO_UNSAAC: ['NOMINADO_UNSAAC', 'NO_ACEPTADO_DESTINO', 'CANCELADO'],
@@ -4152,12 +4153,7 @@ function applicationStatusOptions(application) {
       'CARTA_PENDIENTE',
       'CANCELADO',
     ],
-    CARTA_PENDIENTE: [
-      'CARTA_PENDIENTE',
-      'EN_EVALUACION_DESTINO',
-      'NO_ACEPTADO_DESTINO',
-      'CANCELADO',
-    ],
+    CARTA_PENDIENTE: ['CARTA_PENDIENTE', 'NO_ACEPTADO_DESTINO', 'CANCELADO'],
     NO_ACEPTADO_DESTINO: ['NO_ACEPTADO_DESTINO'],
     ACEPTADO: ['ACEPTADO', 'EN_MOVILIDAD', 'CANCELADO'],
     EN_MOVILIDAD: ['EN_MOVILIDAD', 'DOCUMENTACION_RETORNO', 'CANCELADO'],
@@ -4187,18 +4183,17 @@ function adminStatusFlow() {
     <div class="admin-status-flow-content">
       <div class="status-flow-track" aria-label="Flujo principal de estados">
         ${statusFlowCard('draft', 'Borrador', 'El estudiante completa su expediente. Solo él puede verlo y editarlo.')}
-        ${statusFlowCard('submitted', 'Postulado', 'El expediente fue enviado y queda disponible para la revisión de OCRI.')}
-        ${statusFlowCard('review', 'Revisión OCRI', 'OCRI comprueba requisitos y documentos. Desde aquí toma una de tres decisiones.')}
+        ${statusFlowCard('submitted', 'Postulado', 'El expediente fue enviado. Desde este punto OCRI toma una de las tres decisiones.')}
       </div>
       <div class="flow-decision-heading">OCRI decide</div>
       <div class="status-flow-branches">
-        ${statusFlowCard('warning', 'Subsanación requerida', 'OCRI explica qué falta o está incorrecto. El estudiante corrige y lo devuelve a revisión.')}
+        ${statusFlowCard('warning', 'Subsanación requerida', 'OCRI explica qué falta o está incorrecto. El estudiante corrige y lo devuelve a Postulado.')}
         ${statusFlowCard('stopped', 'No apto', 'No cumple un requisito de la convocatoria. OCRI puede dejar el motivo; permanece en el historial.')}
         ${statusFlowCard('nomination', 'Nominado por UNSAAC', 'OCRI remite la nominación. Se espera la respuesta de la universidad de destino.')}
       </div>
       <div class="status-flow-track status-flow-continuation">
-        ${statusFlowCard('letter', 'Respuesta de destino', 'Si no acepta, OCRI registra “No aceptado”. Si acepta, el estudiante carga su carta PDF.')}
-        ${statusFlowCard('accepted', 'Aceptado', 'La carta PDF fue cargada; el expediente queda listo para iniciar la movilidad.')}
+        ${statusFlowCard('letter', 'Carta por validar', 'El estudiante carga el PDF de aceptación. OCRI verifica que sea válido antes de decidir.')}
+        ${statusFlowCard('accepted', 'Aceptado', 'OCRI validó la carta de aceptación y confirmó el expediente.')}
         ${statusFlowCard('mobility', 'En movilidad', 'La estancia académica ya comenzó en el periodo correspondiente.')}
         ${statusFlowCard('review', 'Documentación de retorno', 'Al volver, se exige convalidación de cursos y certificado de estudios.')}
         ${statusFlowCard('final', 'Concluido', 'OCRI valida ambos documentos y, como mínimo, 12 créditos convalidados.')}
