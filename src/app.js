@@ -445,7 +445,7 @@ function applicationHistoryTimeline(application) {
                   >${esc(STATUS_LABELS[entry.status] || entry.status.replaceAll('_', ' '))}</strong
                 >
               </div>
-              <p>${esc(fullDateTime(entry.changedAt))} · ${esc(entry.changedBy)}</p>
+              <p>${esc(fullDateTime(entry.changedAt))}</p>
               ${entry.note ? `<p class="muted">${esc(entry.note)}</p>` : ''}
             </div>
           </div>`,
@@ -4183,45 +4183,45 @@ function applicationStatusOptions(application) {
 }
 function adminStatusFlow() {
   return html`<details class="admin-status-flow" open>
-    <summary>Guía del flujo y sus decisiones</summary>
+    <summary>Mapa del flujo · toca un estado para ver su descripción</summary>
     <div class="admin-status-flow-content">
-      <ol class="status-flow-track" aria-label="Flujo principal de estados">
-        <li><span class="flow-node draft">Borrador</span></li>
-        <li><span class="flow-node submitted">Postulado</span></li>
-        <li class="has-branches">
-          <span class="flow-node review">En revisión OCRI</span>
-          <div class="flow-branches">
-            <span class="flow-branch warning"
-              >Observado <small>el estudiante corrige y vuelve a revisión</small></span
-            >
-            <span class="flow-branch stopped">Rechazado</span>
-          </div>
-        </li>
-        <li><span class="flow-node nomination">Nominado por UNSAAC</span></li>
-        <li class="has-branches">
-          <span class="flow-node review">En espera de respuesta de destino</span>
-          <div class="flow-branches">
-            <span class="flow-branch stopped">No aceptado por destino</span>
-            <span class="flow-branch letter"
-              >Carta recibida <small>estudiante sube PDF → Aceptado</small></span
-            >
-          </div>
-        </li>
-        <li><span class="flow-node accepted">Aceptado</span></li>
-        <li><span class="flow-node mobility">En movilidad</span></li>
-        <li>
-          <span class="flow-node review"
-            >Documentación de retorno <small>convalidación + certificado</small></span
-          >
-        </li>
-        <li><span class="flow-node final">Concluido</span></li>
-      </ol>
+      <div class="status-flow-track" aria-label="Flujo principal de estados">
+        ${statusFlowCard('draft', 'Borrador', 'El estudiante completa su expediente. Solo él puede verlo y editarlo.')}
+        ${statusFlowCard('submitted', 'Postulado', 'El expediente fue enviado y queda disponible para la revisión de OCRI.')}
+        ${statusFlowCard('review', 'Revisión OCRI', 'OCRI comprueba requisitos y documentos. Desde aquí toma una de tres decisiones.')}
+      </div>
+      <div class="flow-decision-heading">OCRI decide</div>
+      <div class="status-flow-branches">
+        ${statusFlowCard('warning', 'Subsanación requerida', 'OCRI explica qué falta o está incorrecto. El estudiante corrige y lo devuelve a revisión.')}
+        ${statusFlowCard('stopped', 'No apto', 'No cumple un requisito de la convocatoria. OCRI puede dejar el motivo; permanece en el historial.')}
+        ${statusFlowCard('nomination', 'Nominado por UNSAAC', 'OCRI remite la nominación. Se espera la respuesta de la universidad de destino.')}
+      </div>
+      <div class="status-flow-track status-flow-continuation">
+        ${statusFlowCard('letter', 'Respuesta de destino', 'Si no acepta, OCRI registra “No aceptado”. Si acepta, el estudiante carga su carta PDF.')}
+        ${statusFlowCard('accepted', 'Aceptado', 'La carta PDF fue cargada; el expediente queda listo para iniciar la movilidad.')}
+        ${statusFlowCard('mobility', 'En movilidad', 'La estancia académica ya comenzó en el periodo correspondiente.')}
+        ${statusFlowCard('review', 'Documentación de retorno', 'Al volver, se exige convalidación de cursos y certificado de estudios.')}
+        ${statusFlowCard('final', 'Concluido', 'OCRI valida ambos documentos y, como mínimo, 12 créditos convalidados.')}
+      </div>
       <p class="status-flow-note">
         <strong>Cancelado</strong> es una salida excepcional. Desde la nominación, cualquier
         desistimiento requiere el trámite formal con OCRI.
       </p>
     </div>
   </details>`;
+}
+function statusFlowCard(kind, title, description) {
+  return html`<button
+    class="flow-card ${kind}"
+    type="button"
+    onclick="this.classList.toggle('is-flipped')"
+    aria-label="${esc(title)}. Toca para ver la descripción."
+  >
+    <span class="flow-card-inner"
+      ><span class="flow-card-face"><strong>${esc(title)}</strong><small>Ver detalle</small></span
+      ><span class="flow-card-back">${esc(description)}</span></span
+    >
+  </button>`;
 }
 function statusDescription(status) {
   return (
