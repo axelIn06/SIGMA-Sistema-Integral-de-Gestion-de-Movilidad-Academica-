@@ -1,4 +1,4 @@
-const normalizeForMatch = (value) =>
+export const normalizeForMatch = (value) =>
   String(value || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -6,7 +6,7 @@ const normalizeForMatch = (value) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-const cleanText = (value) =>
+export const cleanText = (value) =>
   String(value || '')
     .replace(/\s+/g, ' ')
     .replace(/\s+([,.;:!?%)])/g, '$1')
@@ -17,12 +17,12 @@ const cleanText = (value) =>
     .replace(/\bEncontrase\b/gi, 'Encontrarse')
     .trim();
 
-const sentenceCase = (value) => {
+export const sentenceCase = (value) => {
   const text = cleanText(value);
   return text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : '';
 };
 
-const titleCase = (value) =>
+export const titleCase = (value) =>
   cleanText(value)
     .toLocaleLowerCase('es-PE')
     .replace(/(^|[\s(-])([a-záéíóúñü])/g, (_, prefix, letter) => prefix + letter.toUpperCase())
@@ -31,7 +31,7 @@ const titleCase = (value) =>
     )
     .replace(/\b(UNSAAC|BUAP|PUCP|UNAM)\b/gi, (word) => word.toUpperCase());
 
-const unique = (values) => [...new Set(values.filter(Boolean))];
+export const unique = (values) => [...new Set(values.filter(Boolean))];
 
 const COUNTRIES = [
   'Argentina',
@@ -82,7 +82,7 @@ const MONTHS = {
   diciembre: 12,
 };
 
-function sectionLines(pages, startsSection, endsSection) {
+export function sectionLines(pages, startsSection, endsSection) {
   const result = [];
   let active = false;
   for (const page of pages) {
@@ -100,7 +100,7 @@ function sectionLines(pages, startsSection, endsSection) {
   return result;
 }
 
-function groupNumberedLines(lines) {
+export function groupNumberedLines(lines) {
   const groups = [];
   let current = '';
   let currentNumber = null;
@@ -121,7 +121,7 @@ function groupNumberedLines(lines) {
   return { groups, numbers };
 }
 
-function groupRequirements(lines) {
+export function groupRequirements(lines) {
   const requirements = [];
   let current = '';
   const startsRequirement =
@@ -143,7 +143,7 @@ function groupRequirements(lines) {
   return unique(requirements);
 }
 
-function parseDocument(value) {
+export function parseDocument(value) {
   const withoutClicks = cleanText(value)
     .replace(/\((?:hacer\s+)?click\)/gi, '')
     .trim();
@@ -158,7 +158,7 @@ function parseDocument(value) {
   };
 }
 
-function findUniversity(lines, fileName = '') {
+export function findUniversity(lines, fileName = '') {
   const candidates = [
     ...lines,
     String(fileName || '')
@@ -183,7 +183,7 @@ function findUniversity(lines, fileName = '') {
   return titleCase(candidate);
 }
 
-function inferMobilityScope(country, university, fileName) {
+export function inferMobilityScope(country, university, fileName) {
   if (country) return country === 'Perú' ? 'NACIONAL' : 'INTERNACIONAL';
   const context = `${university || ''} ${fileName || ''}`;
   if (PERUVIAN_INSTITUTION_PATTERN.test(context) || PERUVIAN_CITY_PATTERN.test(context))
@@ -192,12 +192,12 @@ function inferMobilityScope(country, university, fileName) {
   return 'UNKNOWN';
 }
 
-function findCountry(text) {
+export function findCountry(text) {
   const normalized = normalizeForMatch(text);
   return COUNTRIES.find((country) => normalized.includes(normalizeForMatch(country))) || '';
 }
 
-function findClosingDate(pages, fallbackYear) {
+export function findClosingDate(pages, fallbackYear) {
   const firstPagesText = pages
     .slice(0, 2)
     .flatMap((page) => page.lines || [])
