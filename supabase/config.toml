@@ -98,7 +98,7 @@ port = 54323
 api_url = "http://127.0.0.1"
 # Email testing server. Emails sent with the local dev setup are not actually sent - rather, they
 # are monitored, and you can view the emails that would have been sent from the web interface.
-[inbucket]
+[local_smtp]
 enabled = true
 # Port to use for the email testing server web interface.
 port = 54324
@@ -152,13 +152,11 @@ max_indexes = 5
 enabled = true
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
-site_url = "https://sigma-ocri.vercel.app"
+site_url = "http://localhost:5173"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
 additional_redirect_urls = [
-  "https://sigma-ocri.vercel.app/**",
-  "https://*-aar8.vercel.app/**",
   "http://localhost:5173/**",
   "http://127.0.0.1:5173/**",
 ]

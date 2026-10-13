@@ -18,14 +18,34 @@ de estados y postulaciones están centralizadas en `src/utils.js`; la extracció
 
 ## Entornos
 
-| Comando              | Archivo local        | Uso                                            |
-| -------------------- | -------------------- | ---------------------------------------------- |
-| `npm run dev`        | `.env.local`         | Desarrollo con la configuración predeterminada |
-| `npm run dev:local`  | `.env.mailpit.local` | Supabase CLI local y correos en Mailpit        |
-| `npm run dev:remote` | `.env.remote.local`  | Desarrollo contra Supabase Cloud               |
+| Comando              | Archivo local        | Uso                                     |
+| -------------------- | -------------------- | --------------------------------------- |
+| `npm run dev`        | `.env.mailpit.local` | Supabase CLI local y correos en Mailpit |
+| `npm run dev:local`  | `.env.mailpit.local` | Supabase CLI local y correos en Mailpit |
+| `npm run dev:remote` | `.env.remote.local`  | Desarrollo contra Supabase Cloud        |
 
 Los archivos `.local` contienen credenciales y están ignorados por Git. Sus plantillas versionadas
 son `.env.example`, `.env.mailpit.example` y `.env.remote.example`.
+
+El `supabase/config.toml` configura solo la pila de Supabase CLI: su URL principal es
+`http://localhost:5173` para que los mensajes de Mailpit vuelvan al servidor local. **No ejecutes
+`supabase config push` contra Cloud con este archivo**, pues reemplazaría la URL de producción.
+Cloud mantiene su propia configuración en el panel de Supabase: URL principal
+`https://sigma-ocri.vercel.app` y redirecciones permitidas para Vercel y el desarrollo remoto.
+El proyecto activo es **SIGMA - OCRI South America**, `nmpuumbslvsekavngjnm`, en São Paulo
+(`sa-east-1`). Su API es `https://nmpuumbslvsekavngjnm.supabase.co`. El proyecto de Canadá,
+`ynytfgycflolkgjdcmkq`, queda fuera del despliegue vigente; sus datos no se sincronizan con Brasil.
+
+Vercel almacena `VITE_SUPABASE_URL` y `VITE_SUPABASE_PUBLISHABLE_KEY` para el proyecto activo.
+Son variables de compilación de Vite: cualquier cambio requiere un nuevo despliegue. Los archivos
+`.env.*.local`, la documentación, los tests y el directorio `supabase/` no se suben con la CLI de
+Vercel gracias a `.vercelignore`.
+
+Los correos locales se consultan en Mailpit (`http://127.0.0.1:54324`). El proyecto Cloud aún
+necesita un SMTP personalizado para enviar confirmaciones y recuperaciones a estudiantes reales;
+el SMTP incorporado de Supabase está limitado a los miembros del equipo y a 2 correos por hora.
+La URL del remitente y sus credenciales se configuran solo en Supabase Cloud, nunca en variables
+`VITE_` ni en el repositorio.
 
 ## Base de datos
 

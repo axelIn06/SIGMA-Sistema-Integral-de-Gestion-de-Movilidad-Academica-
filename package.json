@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --mode mailpit",
     "dev:local": "vite --mode mailpit",
     "dev:remote": "vite --mode remote",
     "build": "vite build",

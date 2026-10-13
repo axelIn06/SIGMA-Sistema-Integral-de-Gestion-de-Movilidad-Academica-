@@ -6,6 +6,7 @@ import loginBackgroundUrl from './assets/Fondo_PantallaLogIn.jpg';
 import unsaacCampusUrl from './assets/unsaac-ciudad-universitaria.webp';
 import sigmaAirplaneUrl from './assets/sigma-airplane.svg';
 import { academicPeriodForDate, parseBrochureContent } from './brochure-parser.js';
+import { answerHelpQuestion } from './help-assistant.js';
 import {
   STATUS_DESCRIPTIONS,
   STATUS_LABELS,
@@ -78,6 +79,8 @@ let selectedStudentApplicationId = null;
 let academicCatalog = [];
 const pendingApplicationFiles = new Map();
 let loginAnimation = null;
+let helpAssistantOpen = false;
+let helpAssistantMessages = [];
 const particleLibraryReady = loadSlim(tsParticles);
 
 // Permite usar plantillas HTML formateadas sin alterar sus interpolaciones.
@@ -610,6 +613,9 @@ function authShell({
 function login() {
   stopLoginAnimation();
   session = null;
+  helpAssistantOpen = false;
+  helpAssistantMessages = [];
+  $('#help-assistant-root').innerHTML = '';
   $('#app').innerHTML = authShell({
     bareBody: true,
     body: html`<div class="sgmee-choice-card" aria-label="Opciones de acceso">
@@ -673,8 +679,8 @@ function showLoginForm() {
         </div>
         <button type="button" class="sgmee-back" onclick="login()">← Volver</button>`
     : html`<p class="sgmee-note">
-        Falta la configuración local de Supabase. Copie <code>.env.example</code> a
-        <code>.env.local</code> antes de iniciar la aplicación.
+        No se configuró la conexión con Supabase para este entorno. Contacta con el administrador
+        del sistema.
       </p>`;
   $('#app').innerHTML = authShell({
     cardEyebrow: 'Bienvenido',
@@ -731,11 +737,18 @@ function showRecover() {
 async function signIn(event) {
   event.preventDefault();
   const f = Object.fromEntries(new FormData(event.target));
-  const { error } = await supabase.auth.signInWithPassword({
-    email: f.email,
-    password: f.password,
-  });
-  if (error) toast('Correo o contraseña incorrectos.');
+  try {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: f.email,
+      password: f.password,
+    });
+    if (!error) return;
+    if (error.code === 'invalid_credentials') return toast('Correo o contraseña incorrectos.');
+    if (error.status === 429) return toast('Demasiados intentos. Inténtalo más tarde.');
+    toast('No se pudo iniciar sesión. Comprueba la conexión e inténtalo de nuevo.');
+  } catch {
+    toast('No se pudo conectar con Supabase. Comprueba tu conexión e inténtalo de nuevo.');
+  }
 }
 async function requestPasswordReset(event) {
   event?.preventDefault?.();
@@ -746,11 +759,19 @@ async function requestPasswordReset(event) {
     ? new FormData(form).get('email')?.toString().trim()
     : document.querySelector('[name="email"]')?.value?.trim();
   if (!email) return toast('Ingrese primero su correo.');
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: window.location.origin,
-  });
-  toast(error ? error.message : 'Enlace de recuperación enviado. Revise su correo.');
-  if (!error) login();
+  try {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    if (error) {
+      if (error.status === 429) return toast('Límite de correos alcanzado. Inténtalo más tarde.');
+      return toast(error.message);
+    }
+    login();
+    toast('Si la cuenta existe, recibirá un enlace de recuperación. Revise su correo.');
+  } catch {
+    toast('No se pudo conectar con Supabase. Comprueba tu conexión e inténtalo de nuevo.');
+  }
 }
 function showRegister() {
   stopLoginAnimation();
@@ -1004,7 +1025,11 @@ function portalMeta() {
 function render() {
   stopLoginAnimation();
   if (!session) return login();
-  if (session.role === 'pending') return accessPending();
+  if (session.role === 'pending') {
+    accessPending();
+    renderHelpAssistant();
+    return;
+  }
   const portal = portalMeta();
   if (![...portal.menu.map(([target]) => target), 'profile'].includes(route)) route = 'dashboard';
   const navigation = portal.menu
@@ -1060,6 +1085,7 @@ function render() {
     </div>
   </div>`;
   views[route]?.();
+  renderHelpAssistant();
 }
 function renderMobilityStudentPortal(portal, navigation) {
   const photo = session.photoUrl
@@ -1098,6 +1124,125 @@ function renderMobilityStudentPortal(portal, navigation) {
     <nav class="student-mobile-nav" aria-label="Navegación móvil">${navigation}</nav>
   </div>`;
   views[route]?.();
+  renderHelpAssistant();
+}
+
+function helpAssistantContext() {
+  const current =
+    state.applications.find((application) => application.id === selectedStudentApplicationId) ||
+    (session?.role === 'external'
+      ? getActiveMobilityApplicationUtil(state.applications, session, 'ENTRANTE')
+      : getActiveStudentApplicationUtil(state.applications, session));
+  return {
+    status: current?.status,
+    statusLabel: current ? applicationStatusText(current) : '',
+    statusDescription: current ? statusDescription(current.status, current) : '',
+    statusNote: current?.statusNote,
+    direction: current?.direction || (session?.role === 'external' ? 'ENTRANTE' : 'SALIENTE'),
+    documents: current?.documents || [],
+  };
+}
+
+function renderHelpAssistant() {
+  const root = $('#help-assistant-root');
+  if (!root) return;
+  if (!session || session.role === 'pending') {
+    root.innerHTML = '';
+    return;
+  }
+  const messages = helpAssistantMessages.length
+    ? helpAssistantMessages
+    : [
+        {
+          type: 'assistant',
+          text: 'Hola. Puedo ayudarte a entender el flujo, los estados y los documentos de movilidad.',
+        },
+      ];
+  root.innerHTML = html`<div class="help-assistant ${helpAssistantOpen ? 'is-open' : ''}">
+    ${
+      helpAssistantOpen
+        ? html`<section class="help-assistant-panel" role="dialog" aria-label="Ayuda SIGMA">
+            <header class="help-assistant-header">
+              <div>
+                <strong>Ayuda SIGMA</strong><small>Orientación sobre movilidad y expedientes</small>
+              </div>
+              <button
+                class="help-assistant-close"
+                type="button"
+                aria-label="Cerrar ayuda"
+                onclick="toggleHelpAssistant()"
+              >
+                ×
+              </button>
+            </header>
+            <div class="help-assistant-messages" id="helpAssistantMessages" aria-live="polite">
+              ${messages.map((message) => html`<p class="help-message help-message--${message.type}">${esc(message.text)}</p>`).join('')}
+            </div>
+            <div class="help-assistant-suggestions" aria-label="Preguntas frecuentes">
+              <button type="button" onclick="askHelpQuestion('¿Qué significa mi estado?')">
+                Mi estado
+              </button>
+              <button type="button" onclick="askHelpQuestion('¿Qué documentos debo subir?')">
+                Documentos
+              </button>
+              <button type="button" onclick="askHelpQuestion('¿Qué pasa al volver de movilidad?')">
+                Al volver
+              </button>
+            </div>
+            <form class="help-assistant-form" onsubmit="sendHelpQuestion(event)">
+              <label class="visually-hidden" for="helpAssistantInput">Escribe tu pregunta</label>
+              <input
+                id="helpAssistantInput"
+                name="question"
+                maxlength="240"
+                placeholder="Escribe tu pregunta"
+                autocomplete="off"
+                required
+              />
+              <button type="submit">Enviar</button>
+            </form>
+          </section>`
+        : ''
+    }
+    <button
+      class="help-assistant-launcher"
+      type="button"
+      aria-expanded="${helpAssistantOpen}"
+      onclick="toggleHelpAssistant()"
+    >
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path
+          d="M4 5.75A2.75 2.75 0 0 1 6.75 3h10.5A2.75 2.75 0 0 1 20 5.75v7.5A2.75 2.75 0 0 1 17.25 16H10l-5 4v-4.25A2.75 2.75 0 0 1 4 13.5z"
+        />
+      </svg>
+      ${helpAssistantOpen ? 'Cerrar ayuda' : '¿Necesitas ayuda?'}
+    </button>
+  </div>`;
+  const conversation = $('#helpAssistantMessages');
+  if (conversation) conversation.scrollTop = conversation.scrollHeight;
+}
+
+function toggleHelpAssistant() {
+  helpAssistantOpen = !helpAssistantOpen;
+  renderHelpAssistant();
+  if (helpAssistantOpen) $('#helpAssistantInput')?.focus();
+}
+
+function askHelpQuestion(question) {
+  helpAssistantMessages.push({ type: 'user', text: question });
+  helpAssistantMessages.push({
+    type: 'assistant',
+    text: answerHelpQuestion(question, helpAssistantContext()),
+  });
+  renderHelpAssistant();
+  $('#helpAssistantInput')?.focus();
+}
+
+function sendHelpQuestion(event) {
+  event.preventDefault();
+  const question = new FormData(event.currentTarget).get('question')?.toString().trim();
+  if (!question) return;
+  askHelpQuestion(question);
 }
 function toggleStudentAccountMenu() {
   $('#studentAccountMenu')?.classList.toggle('hidden');
@@ -5193,6 +5338,9 @@ Object.assign(window, {
   setPassword,
   signOut,
   go,
+  toggleHelpAssistant,
+  askHelpQuestion,
+  sendHelpQuestion,
   callModal,
   startManualCall,
   analyzeCallBrochure,

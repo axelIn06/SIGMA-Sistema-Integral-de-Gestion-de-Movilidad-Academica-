@@ -25,6 +25,11 @@ Para ejecutar contra Supabase local y Mailpit:
 npm run dev:local
 ```
 
+`npm run dev` también usa el entorno local. Solo `npm run dev:remote` apunta a Supabase
+Cloud durante el desarrollo. En Vercel, las variables `VITE_SUPABASE_URL` y
+`VITE_SUPABASE_PUBLISHABLE_KEY` deben configurarse para Producción y el proyecto debe
+volver a desplegarse después de cambiarlas; los archivos `.env.*.local` no se publican.
+
 ## Verificación
 
 ```bash
@@ -40,5 +45,11 @@ npx supabase db push --linked --dry-run
 npx supabase db push --linked
 ```
 
-El proyecto remoto vigente es **SIGMA - OCRI South America**. Antes de aplicar migraciones,
-comprueba con `npx supabase projects list` que el enlace local apunte a ese proyecto.
+El proyecto remoto vigente es **SIGMA - OCRI South America**, en São Paulo (`sa-east-1`),
+con identificador `nmpuumbslvsekavngjnm`. La web publicada es https://sigma-ocri.vercel.app.
+Antes de aplicar migraciones, comprueba con `npx supabase projects list` que el enlace local
+apunte a ese proyecto. Para enlazar un nuevo equipo:
+
+```bash
+supabase link --project-ref nmpuumbslvsekavngjnm
+```
