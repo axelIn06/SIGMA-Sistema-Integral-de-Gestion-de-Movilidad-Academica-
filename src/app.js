@@ -7,6 +7,8 @@ import unsaacCampusUrl from './assets/unsaac-ciudad-universitaria.webp';
 import sigmaAirplaneUrl from './assets/sigma-airplane.svg';
 import { academicPeriodForDate, parseBrochureContent } from './brochure-parser.js';
 import { answerHelpQuestion } from './help-assistant.js';
+import { mapCallNotice, orderedCallItems } from './call-data.js';
+import { callLifecycle } from './call-lifecycle.js';
 import {
   STATUS_DESCRIPTIONS,
   STATUS_LABELS,
@@ -17,6 +19,7 @@ import {
   isUuid,
   isClosedApplication as isClosedApplicationUtil,
   isOperationalApplication as isOperationalApplicationUtil,
+  matchesExpedientStatus,
   successfulMobilityHistory as successfulMobilityHistoryUtil,
   mobilityEligibility as mobilityEligibilityUtil,
   canStudentWithdrawApplication as canStudentWithdrawApplicationUtil,
@@ -75,6 +78,7 @@ let callWizardStep = 1;
 let editingCallId = null;
 let pendingProfilePhotoPreview = '';
 let applicationDraft = null;
+let applicationReadingStep = 0;
 let selectedStudentApplicationId = null;
 let academicCatalog = [];
 const pendingApplicationFiles = new Map();
@@ -96,7 +100,7 @@ async function mapDatabaseCall(call) {
       ? supabase.storage.from('call-assets').createSignedUrl(call.cover_image_path, 60 * 60)
       : null,
     Promise.all(
-      (call.call_resources || []).map(async (resource) => {
+      orderedCallItems(call.call_resources).map(async (resource) => {
         const signed = resource.storage_path
           ? await supabase.storage
               .from('call-assets')
@@ -121,34 +125,46 @@ async function mapDatabaseCall(call) {
     mobilityScope: call.mobility_scope || '',
     end: call.closes_on,
     status: call.status,
+    concludedAt: call.concluded_at,
+    archivedAt: call.archived_at,
     coverImagePath: call.cover_image_path || '',
     coverImage: cover?.data?.signedUrl || '',
     coverName: call.cover_image_path?.split('/').at(-1) || '',
-    guidelines: (call.call_guidelines || []).map((item) => item.content),
-    documents: (call.call_requirements || []).map((item) => ({
+    guidelines: orderedCallItems(call.call_guidelines).map((item) => item.content),
+    documents: orderedCallItems(call.call_requirements).map((item) => ({
       requirementId: item.id,
       title: item.title,
       description: item.description || '',
       required: item.is_required,
+      url: item.source_url || '',
     })),
     resources,
-    notice: {
-      links: (call.call_notices?.[0]?.call_notice_links || []).map((item) => ({
-        label: item.label,
-        url: item.url || '',
-      })),
-    },
+    notice: mapCallNotice(call.call_notices),
   };
 }
 
 async function loadCallsFromDatabase() {
   if (!supabase || !session) return;
-  const { data, error } = await supabase
+  const fields = (documentLinks, noticeDescription, noticeKind) =>
+    `id,code,title,direction,period,activity_type,mobility_scope,closes_on,status,concluded_at,archived_at,cover_image_path,call_guidelines(content,display_order),call_requirements(id,title,description,is_required${documentLinks ? ',source_url' : ''},display_order),call_resources(description,file_name,storage_path,display_order),call_notices(${noticeDescription ? 'description,' : ''}call_notice_links(label,url${noticeKind ? ',kind' : ''},display_order))`;
+  let documentLinks = true;
+  let noticeDescription = true;
+  let noticeKind = true;
+  let { data, error } = await supabase
     .from('calls')
-    .select(
-      'id,code,title,direction,period,activity_type,mobility_scope,closes_on,status,cover_image_path,call_guidelines(content,display_order),call_requirements(id,title,description,is_required,display_order),call_resources(description,file_name,storage_path,display_order),call_notices(call_notice_links(label,url,display_order))',
-    )
+    .select(fields(documentLinks, noticeDescription, noticeKind))
     .order('created_at', { ascending: false });
+
+  for (let attempt = 0; error && attempt < 3; attempt += 1) {
+    if (/source_url/i.test(error.message)) documentLinks = false;
+    else if (/kind/i.test(error.message)) noticeKind = false;
+    else if (/description/i.test(error.message)) noticeDescription = false;
+    else break;
+    ({ data, error } = await supabase
+      .from('calls')
+      .select(fields(documentLinks, noticeDescription, noticeKind))
+      .order('created_at', { ascending: false }));
+  }
 
   if (error) {
     console.warn('No se pudieron cargar las convocatorias desde Supabase.', error.message);
@@ -276,7 +292,9 @@ async function loadApplicationsFromDatabase() {
       activityType: application.calls?.activity_type || 'MOVILIDAD',
       mobilityScope: application.calls?.mobility_scope || '',
       student: application.profiles?.full_name || application.profiles?.email || 'Estudiante',
-      code: application.student_code || 'Pendiente',
+      code:
+        application.student_code ||
+        (application.calls?.direction === 'ENTRANTE' ? '' : 'Pendiente'),
       faculty: application.faculty || 'Pendiente',
       academicProgram: application.academic_program || '',
       destination: application.calls?.title || 'Convocatoria',
@@ -373,6 +391,7 @@ function applicationStatusText(application, status = application.status) {
       OBSERVADA: 'Subsanación requerida',
       RECHAZADA: 'No apto por UNSAAC',
       ADMITIDO_UNSAAC: 'Aceptado por UNSAAC',
+      MATRICULA_HABILITADA: 'Resolución y código emitidos',
       EN_MOVILIDAD: 'En movilidad',
       FINALIZADA: 'Concluido',
       CANCELADO: 'Cancelado',
@@ -388,7 +407,9 @@ function applicationBadge(application) {
   const description = statusDescription(application.status, application);
   const className = ['RECHAZADA', 'CANCELADO'].includes(application.status)
     ? 'bad'
-    : ['ADMITIDO_UNSAAC', 'EN_MOVILIDAD', 'FINALIZADA'].includes(application.status)
+    : ['ADMITIDO_UNSAAC', 'MATRICULA_HABILITADA', 'EN_MOVILIDAD', 'FINALIZADA'].includes(
+          application.status,
+        )
       ? 'ok'
       : ['OBSERVADA', 'BORRADOR'].includes(application.status)
         ? 'warn'
@@ -1146,8 +1167,9 @@ function helpAssistantContext() {
 function renderHelpAssistant() {
   const root = $('#help-assistant-root');
   if (!root) return;
-  if (!session || session.role === 'pending') {
+  if (!['student', 'external'].includes(session?.role)) {
     root.innerHTML = '';
+    helpAssistantOpen = false;
     return;
   }
   const messages = helpAssistantMessages.length
@@ -1223,12 +1245,14 @@ function renderHelpAssistant() {
 }
 
 function toggleHelpAssistant() {
+  if (!['student', 'external'].includes(session?.role)) return;
   helpAssistantOpen = !helpAssistantOpen;
   renderHelpAssistant();
   if (helpAssistantOpen) $('#helpAssistantInput')?.focus();
 }
 
 function askHelpQuestion(question) {
+  if (!['student', 'external'].includes(session?.role)) return;
   helpAssistantMessages.push({ type: 'user', text: question });
   helpAssistantMessages.push({
     type: 'assistant',
@@ -1400,6 +1424,7 @@ const views = {
   calls() {
     const canEdit = /admin/.test(session.role);
     const visibleCalls = state.calls.filter((call) => {
+      if (call.archivedAt && !canEdit) return false;
       if (session.role === 'student') return call.direction === 'SALIENTE';
       if (session.role === 'external') return call.direction === 'ENTRANTE';
       if (session.role === 'external_manager') return call.direction === 'ENTRANTE';
@@ -1410,16 +1435,8 @@ const views = {
       ? getActiveMobilityApplication()
       : null;
     $('#view').innerHTML =
-      head(
-        'Convocatorias',
-        'Oportunidades y periodos de movilidad académica.',
-        canEdit
-          ? html`<button class="btn btn-primary" onclick="callModal()">
-              + Nueva convocatoria
-            </button>`
-          : '',
-      ) +
-      html`${
+      head('Convocatorias', 'Oportunidades y periodos de movilidad académica.', '') +
+      html`${canEdit ? callCreationChoices() : ''}${
           activeApplication
             ? html`<aside class="student-call-notice">
                 <div>
@@ -1448,10 +1465,15 @@ const views = {
         }${
           showDirectionFilter
             ? html`<div class="filters">
-                <select class="input" onchange="filterCards(this.value)">
+                <select id="callDirectionFilter" class="input" onchange="filterCards()">
                   <option value="">Todas las direcciones</option>
                   <option>SALIENTE</option>
                   <option>ENTRANTE</option>
+                </select>
+                <select id="callArchiveFilter" class="input" onchange="filterCards()">
+                  <option value="current">Sin archivar</option>
+                  <option value="archived">Archivadas</option>
+                  <option value="all">Todas</option>
                 </select>
               </div>`
             : ''
@@ -1729,13 +1751,7 @@ function studentApplicationDetailView(application) {
                   >${document.fileName ? esc(document.fileName) : 'Archivo pendiente'} ·
                   ${document.required ? 'Obligatorio' : 'Opcional'}</small
                 >
-                ${
-                  document.reviewerComment
-                    ? html`<p class="student-document-comment">
-                        <strong>Observación de OCRI:</strong> ${esc(document.reviewerComment)}
-                      </p>`
-                    : ''
-                }
+                ${documentSourceUrl(application.callId, document.requirementId) ? html`<a class="call-document-link" href="${esc(documentSourceUrl(application.callId, document.requirementId))}" target="_blank" rel="noopener noreferrer">Abrir formato o formulario ↗</a>` : ''}
               </div>
               ${badge(document.status)}
             </article>`,
@@ -1789,9 +1805,10 @@ function studentApplicationDetailView(application) {
             : ''
         }
       </section>
-      ${studentWithdrawalGuidance(application)} ${nominationLetterSection(application)}
-      ${acceptanceLetterSection(application)} ${incomingOfficialDocumentsSection(application)}
-      ${returnDocumentationSection(application)}
+      ${brochureGuidance(call, true)} ${studentWithdrawalGuidance(application)}
+      <div class="expedient-stage-documents">
+        ${nominationLetterSection(application)}${acceptanceLetterSection(application)}${incomingOfficialDocumentsSection(application)}${returnDocumentationSection(application)}
+      </div>
       <details class="card student-detail-section collapsible-section">
         <summary class="student-detail-heading">
           <div>
@@ -1810,10 +1827,7 @@ function studentApplicationDetailView(application) {
           </div>
           <strong>${applicationHistory(application).length} cambio(s)</strong>
         </summary>
-        <div class="collapsible-section-content">
-          <p class="muted">Cada avance de tu expediente queda registrado aquí.</p>
-          ${applicationHistoryTimeline(application)}
-        </div>
+        <div class="collapsible-section-content">${applicationHistoryTimeline(application)}</div>
       </details>`;
 }
 function studentDashboard() {
@@ -1821,7 +1835,7 @@ function studentDashboard() {
   const application = getActiveStudentApplication();
   const call = application
     ? state.calls.find((item) => item.id === application.callId)
-    : state.calls.find((item) => item.direction === 'SALIENTE' && item.status === 'ACTIVA');
+    : state.calls.find((item) => item.direction === 'SALIENTE' && callLifecycle(item).open);
   const uploaded = application?.documents.filter((document) => document.storagePath).length || 0;
   const totalDocuments = application?.documents.length || 0;
   const nextStep = !application
@@ -1898,7 +1912,7 @@ function externalStudentDashboard() {
   const application = applications.find((item) => !isClosedApplication(item)) || null;
   const university = session.university || 'tu universidad de origen';
   const latestCall = state.calls.find(
-    (item) => item.direction === 'ENTRANTE' && item.status === 'ACTIVA',
+    (item) => item.direction === 'ENTRANTE' && callLifecycle(item).open,
   );
   $('#view').innerHTML = html`<div class="dashboard-heading student-welcome external-heading">
       <div class="eyebrow">Movilidad entrante · SGME</div>
@@ -1972,13 +1986,13 @@ function adminDashboard(apps) {
   const active = apps.filter(isOperationalApplication);
   const closing = state.calls.filter((c) => {
     const days = (new Date(`${c.end}T23:59:59`) - new Date()) / 86400000;
-    return c.status === 'ACTIVA' && days >= 0 && days <= 14;
+    return callLifecycle(c).open && days >= 0 && days <= 14;
   });
   $('#view').innerHTML =
     head(
       'Panel general',
       'Prioridades y seguimiento de la movilidad académica.',
-      '<button class="btn btn-primary" onclick="callModal()">+ Nueva convocatoria</button>',
+      '<button class="btn btn-primary" onclick="go(\'calls\')">Crear convocatoria</button>',
     ) +
     html`<div class="operational-metrics">
         ${operationalMetric(pendingApplications('SALIENTE').length, 'Pendientes · SGMS salientes', 'applications')}
@@ -2084,14 +2098,17 @@ function operationalTable(apps) {
 }
 function adminApplicationsView() {
   const apps = operationalApplications();
+  const visibleApps = state.applications.filter(
+    (a) => matchesExpedientStatus(a) || matchesExpedientStatus(a, 'CONCLUIDOS'),
+  );
   const options = (values) =>
     [...new Set(values.filter(Boolean))]
       .map((v) => `<option value="${esc(v)}">${esc(STATUS_LABELS[v] || v)}</option>`)
       .join('');
   $('#view').innerHTML =
     head(
-      'Expedientes activos',
-      'Procesos pendientes y movilidades en curso. Los borradores son privados y los concluidos permanecen en el historial personal.',
+      'Expedientes',
+      'Consulta los expedientes activos o selecciona Concluidos en el filtro de estado.',
     ) +
     html`<div class="operational-metrics expediente-groups">
         ${operationalMetric(pendingApplications('SALIENTE').length, 'Pendientes · SGMS salientes', 'applications', 'operational-metric--saliente')}
@@ -2128,7 +2145,8 @@ function adminApplicationsView() {
             >
             <label
               >Estado<select class="input" name="status">
-                <option value="">Todos los estados</option>
+                <option value="">Todos los activos</option>
+                <option value="CONCLUIDOS">Concluidos</option>
                 ${options(apps.map((a) => a.status))}
               </select></label
             >
@@ -2137,7 +2155,7 @@ function adminApplicationsView() {
             <label
               >Periodo<select class="input" name="period">
                 <option value="">Todos los periodos</option>
-                ${options(state.calls.map((c) => c.period))}
+                ${options([...state.calls.map((c) => c.period), ...visibleApps.map((a) => a.period)])}
               </select></label
             >
             <label
@@ -2150,7 +2168,7 @@ function adminApplicationsView() {
             <label
               >Facultad<select class="input" name="faculty">
                 <option value="">Todas las facultades</option>
-                ${options(apps.map((a) => a.faculty))}
+                ${options(visibleApps.map((a) => a.faculty))}
               </select></label
             >
           </div>
@@ -2167,10 +2185,9 @@ function filterOperationalQueue() {
   const apps = state.applications.filter((a) => {
     const call = state.calls.find((c) => c.id === a.callId);
     return (
-      isOperationalApplication(a) &&
+      matchesExpedientStatus(a, filters.status) &&
       (!filters.direction || filters.direction === a.direction) &&
-      (!filters.status || filters.status === a.status) &&
-      (!filters.period || filters.period === call?.period) &&
+      (!filters.period || filters.period === (a.period || call?.period)) &&
       (!filters.faculty || filters.faculty === a.faculty) &&
       (!filters.letter ||
         (filters.letter === 'review'
@@ -2201,7 +2218,7 @@ function managerOverview() {
         ${operationalMetric(nominations.length, 'Nominaciones registradas', 'nominations')}
         ${operationalMetric(nominations.filter((n) => /PENDIENTE|EDICION|BORRADOR|INVITACION/.test(n.status)).length, 'Pendientes del estudiante', 'nominations')}
         ${operationalMetric(nominations.filter((n) => n.status === 'POSTULADO').length, 'Por validar en origen', 'nominations')}
-        ${operationalMetric(nominations.filter((n) => /ACEPTAD|NO_ADMITID|CONCLUID/.test(n.status)).length, 'Resultados registrados', 'manager_results')}
+        ${operationalMetric(nominations.filter((n) => /ACEPTAD|ADMITIDO_UNSAAC|MATRICULA_HABILITADA|EN_MOVILIDAD|RECHAZAD|CONCLUID|FINALIZAD/.test(n.status)).length, 'Resultados registrados', 'manager_results')}
       </div>
       <section class="card role-flow-card">
         <span class="eyebrow">Universidad de origen → UNSAAC</span>
@@ -2226,7 +2243,9 @@ function managerOverview() {
 }
 function managerResultsView() {
   const results = managerNominations().filter((n) =>
-    /ACEPTAD|NO_ADMITID|RECHAZAD|CONCLUID|FINALIZAD|CANCELAD/.test(n.status),
+    /ACEPTAD|ADMITIDO_UNSAAC|MATRICULA_HABILITADA|EN_MOVILIDAD|NO_ADMITID|RECHAZAD|CONCLUID|FINALIZAD|CANCELAD/.test(
+      n.status,
+    ),
   );
   $('#view').innerHTML =
     head(
@@ -2521,10 +2540,9 @@ function applicationDetail(a) {
         }
       </div>
       <div class="applicant-profile-main">
-        <span class="eyebrow">Perfil del postulante</span>
         <h3>${esc(a.student)}</h3>
         <p>
-          ${esc(a.applicant?.email || 'Correo no registrado')}${a.direction === 'ENTRANTE' ? ' · Estudiante externo' : ` · Código ${esc(a.code)}`}
+          ${esc(a.applicant?.email || 'Correo no registrado')}${a.direction === 'ENTRANTE' && !a.code ? ' · Estudiante externo' : ` · Código ${esc(a.code)}`}
         </p>
         <div class="applicant-profile-meta">
           <span><strong>Facultad</strong>${esc(a.faculty || 'Por registrar')}</span>
@@ -2563,7 +2581,7 @@ function applicationDetail(a) {
     <div class="grid-2">
       <details class="card collapsible-section collapsible-section--documents">
         <summary>
-          <span><small>Expediente académico</small><strong>Documentos del expediente</strong></span>
+          <span><strong>Documentos del expediente</strong></span>
           <span class="section-summary-meta"
             >${a.documents.filter((document) => document.storagePath).length} de
             ${a.documents.length} cargados</span
@@ -2587,7 +2605,6 @@ function applicationDetail(a) {
                             >${d.required ? 'Obligatorio' : 'Opcional'} ·
                             ${d.fileName ? esc(d.fileName) : 'Aún no cargado'}</small
                           >
-                          ${d.reviewerComment ? html`<small class="document-review-note">Observación: ${esc(d.reviewerComment)}</small>` : ''}
                         </div>
                         ${badge(d.status)}
                         ${
@@ -2610,13 +2627,10 @@ function applicationDetail(a) {
       </details>
       <details class="card collapsible-section collapsible-section--history">
         <summary>
-          <span><small>Trazabilidad</small><strong>Historial de estados</strong></span>
+          <span><strong>Historial de estados</strong></span>
           <span class="section-summary-meta">${applicationHistory(a).length} cambio(s)</span>
         </summary>
-        <div class="collapsible-section-content">
-          <p class="muted">Registro cronológico de cada cambio en el expediente.</p>
-          ${applicationHistoryTimeline(a)}
-        </div>
+        <div class="collapsible-section-content">${applicationHistoryTimeline(a)}</div>
       </details>
     </div>`;
 }
@@ -2675,11 +2689,13 @@ async function viewApplicationDocument(applicationId, documentId) {
   setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
 }
 function callCard(c) {
+  const lifecycle = callLifecycle(c);
   const cover = c.coverImage ? ` style="background-image:url('${esc(c.coverImage)}')"` : '';
   const titleSize = c.title.length > 58 ? 'is-extra-long' : c.title.length > 28 ? 'is-long' : '';
   return html`<article
-    class="call-card"
+    class="call-card${lifecycle.expired || lifecycle.concluded ? ' is-closed' : ''}${lifecycle.archived ? ' hidden' : ''}"
     data-direction="${c.direction}"
+    data-archived="${lifecycle.archived}"
     role="button"
     tabindex="0"
     aria-label="Abrir convocatoria ${esc(c.title)}"
@@ -2687,13 +2703,15 @@ function callCard(c) {
     onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showCallSummary('${c.id}')}"
   >
     <div class="call-cover${c.coverImage ? ' has-image' : ''}" ${cover}>
-      <div class="call-flags">${badge(c.status)}${badge(c.direction)}</div>
-      <span class="call-open-hint">Abrir convocatoria ↗</span>
+      <div class="call-flags">
+        ${lifecycle.expired || lifecycle.concluded ? '' : badge(c.status)}${badge(c.direction)}
+      </div>
+      ${lifecycle.expired || lifecycle.concluded ? html`<span class="call-stamp">${lifecycle.label}</span>` : ''}
     </div>
     <div class="call-body">
       <div class="call-title-row"><h3 class="${titleSize}">${esc(c.title)}</h3></div>
       <div class="call-meta-line">
-        <strong>${esc(c.period)}</strong><span></span
+        <strong>${esc(c.period)}</strong
         ><b
           >${esc(
             c.activityType === 'MOVILIDAD'
@@ -2702,7 +2720,7 @@ function callCard(c) {
                 ? 'Programa especial'
                 : 'Pasantía',
           )}</b
-        ><span></span><b>Límite: ${shortDate(c.end)}</b>
+        ><b class="call-deadline">Hasta el ${shortDate(c.end)}</b>
       </div>
     </div>
   </article>`;
@@ -2773,15 +2791,32 @@ function emptyCallDraft() {
     guidelines: [],
     documents: [],
     resources: [],
-    notice: { links: [] },
+    notice: { description: '', links: [] },
     importMeta: null,
   };
 }
-function callModal() {
+function callCreationChoices() {
+  return html`<div class="call-creation-choices" aria-label="Crear convocatoria">
+    <button type="button" onclick="callModal('SALIENTE')">
+      <span>SGMS · Saliente</span
+      ><strong>Crear convocatoria saliente <b aria-hidden="true">→</b></strong
+      ><small>Para estudiantes UNSAAC que irán a otra universidad.</small>
+    </button>
+    <button type="button" onclick="callModal('ENTRANTE')">
+      <span>SGME · Entrante</span
+      ><strong>Crear convocatoria entrante <b aria-hidden="true">→</b></strong
+      ><small>Para recibir estudiantes de otras universidades en la UNSAAC.</small>
+    </button>
+  </div>`;
+}
+function callModal(direction) {
   if (session?.role !== 'admin') return;
+  if (!['SALIENTE', 'ENTRANTE'].includes(direction)) return go('calls');
+  closeModal();
   editingCallId = null;
   callWizardStep = 1;
   callDraft = emptyCallDraft();
+  callDraft.direction = direction;
   renderCallStart();
 }
 function renderCallStart() {
@@ -2793,7 +2828,10 @@ function renderCallStart() {
       </div>
       <button class="wizard-exit" onclick="closeModal()">← Volver a convocatorias</button>
       <div class="brochure-start-copy">
-        <div class="eyebrow">Nueva convocatoria</div>
+        <div class="eyebrow">
+          Nueva convocatoria ·
+          ${callDraft.direction === 'ENTRANTE' ? 'SGME / Entrante' : 'SGMS / Saliente'}
+        </div>
         <h2>¿Cómo deseas comenzar?</h2>
         <p>
           Importa el brochure para adelantar el formulario automáticamente o empieza con una
@@ -2888,20 +2926,30 @@ async function extractLocalPdfContent(file) {
       });
 
       const seenLines = new Set();
-      const lines = rows
+      const lineEntries = rows
         .sort((a, b) => b.y - a.y)
-        .map((row) => joinPdfLineItems(row.items))
-        .filter((line) => {
-          const key = line.toLocaleLowerCase('es-PE');
-          if (!line || seenLines.has(key)) return false;
+        .map((row) => ({
+          text: joinPdfLineItems(row.items),
+          y: row.y,
+          x: Math.min(...row.items.map((item) => item.x)),
+          items: row.items,
+        }))
+        .filter((entry) => {
+          const key = `${Math.round(entry.y)}:${entry.text.toLocaleLowerCase('es-PE')}`;
+          if (!entry.text || seenLines.has(key)) return false;
           seenLines.add(key);
           return true;
         });
-      pages.push({ pageNumber, lines });
+      pages.push({
+        pageNumber,
+        width: page.view[2] - page.view[0],
+        lines: lineEntries.map((entry) => entry.text),
+        lineEntries,
+      });
       annotations.forEach((annotation) => {
         const url = String(annotation.url || annotation.unsafeUrl || '').trim();
-        if (/^https?:\/\//i.test(url) && !links.some((link) => link.url === url))
-          links.push({ url, pageNumber });
+        if (/^https?:\/\//i.test(url))
+          links.push({ url, pageNumber, rect: annotation.rect || null });
       });
       page.cleanup();
     }
@@ -2934,14 +2982,28 @@ function applyBrochureExtraction(extraction, file) {
           title: String(item.title).trim(),
           description: importedDocumentDescription(item),
           required: item.stage === 'APPLICATION' ? item.required !== false : false,
+          url: String(item.url || '').trim(),
           importStage: item.stage || 'APPLICATION',
         }))
     : [];
   const notices = Array.isArray(extraction.important_notices)
     ? extraction.important_notices
         .filter((item) => item?.text)
-        .map((item) => ({ label: String(item.text).trim(), url: String(item.url || '').trim() }))
+        .map((item) => ({
+          label: String(item.text).trim(),
+          url: String(item.url || '').trim(),
+          kind: item.kind === 'IMPORTANT' ? 'IMPORTANT' : 'ADDITIONAL',
+        }))
     : [];
+  const processIntroduction = notices.findIndex(
+    (item) => !item.url && /^Proceso de postulación\s*:/i.test(item.label),
+  );
+  const noticeDescription =
+    processIntroduction < 0
+      ? ''
+      : notices
+          .splice(processIntroduction, 1)[0]
+          .label.replace(/^Proceso de postulación\s*:\s*/i, '');
   const warnings = Array.isArray(extraction.warnings)
     ? extraction.warnings.map((item) => String(item).trim()).filter(Boolean)
     : [];
@@ -2951,9 +3013,7 @@ function applyBrochureExtraction(extraction, file) {
   callDraft = {
     ...emptyCallDraft(),
     title: String(extraction.title || fallbackTitle).trim(),
-    direction: ['SALIENTE', 'ENTRANTE'].includes(extraction.direction)
-      ? extraction.direction
-      : 'SALIENTE',
+    direction: callDraft.direction,
     period: /^\d{4}-(I|II)$/.test(String(extraction.period || ''))
       ? extraction.period
       : nextAcademicPeriod(),
@@ -2977,7 +3037,7 @@ function applyBrochureExtraction(extraction, file) {
         storagePath: '',
       },
     ],
-    notice: { links: notices },
+    notice: { description: noticeDescription, links: notices },
     importMeta: {
       fileName: file.name,
       confidence: extraction.confidence || 'LOW',
@@ -3014,7 +3074,10 @@ async function analyzeCallBrochure(input) {
 
   try {
     const { pages, links } = await extractLocalPdfContent(file);
-    const extraction = parseBrochureContent(pages, links, { fileName: file.name });
+    const extraction = parseBrochureContent(pages, links, {
+      fileName: file.name,
+      direction: callDraft.direction,
+    });
     extraction.page_count = pages.length;
     applyBrochureExtraction(extraction, file);
     callWizardStep = 1;
@@ -3041,7 +3104,10 @@ function editCall(id) {
     callDraft.guidelinesText || callDraft.guidelines.map((item) => `• ${item}`).join('\n');
   callDraft.documents = callDraft.documents || [];
   callDraft.resources = callDraft.resources || [];
-  callDraft.notice = { links: noticeLinks(callDraft.notice) };
+  callDraft.notice = {
+    description: callDraft.notice?.description || '',
+    links: noticeLinks(callDraft.notice),
+  };
   renderCallWizard();
 }
 function nextAcademicPeriod() {
@@ -3069,7 +3135,6 @@ function syncCallDraft() {
     text = (name, fallback = '') => (has(name) ? String(data.get(name) || '').trim() : fallback);
   if (has('title')) {
     callDraft.title = text('title', callDraft.title);
-    callDraft.direction = text('direction', callDraft.direction);
     callDraft.period = text('period', callDraft.period);
     callDraft.activityType = text('activity_type', callDraft.activityType);
     callDraft.mobilityScope =
@@ -3089,6 +3154,7 @@ function syncCallDraft() {
     callDraft.documents = callDraft.documents.map((item, index) => ({
       title: text(`document_title_${index}`, item.title),
       description: text(`document_description_${index}`, item.description),
+      url: text(`document_url_${index}`, item.url || ''),
       required: has(`document_required_${index}`)
         ? data.get(`document_required_${index}`) === 'on'
         : item.required,
@@ -3102,19 +3168,29 @@ function syncCallDraft() {
         fileName: file instanceof File && file.name ? file.name : item.fileName,
       };
     });
-  if (has('notice_link_label_0'))
-    callDraft.notice = {
-      links: (callDraft.notice.links || []).map((item, index) => ({
-        label: text(`notice_link_label_${index}`, item.label),
-        url: text(`notice_link_url_${index}`, item.url),
-      })),
-    };
+  if (has('notice_description'))
+    callDraft.notice.description = text('notice_description', callDraft.notice.description);
+  if (callDraft.notice.links.some((_, index) => has(`notice_link_label_${index}`)))
+    callDraft.notice.links = (callDraft.notice.links || []).map((item, index) => ({
+      label: text(`notice_link_label_${index}`, item.label),
+      url: text(`notice_link_url_${index}`, item.url),
+      kind: item.kind || 'ADDITIONAL',
+    }));
 }
 function wizardNavigation() {
-  const labels = ['Información', 'Requisitos', 'Documentos', 'Material OCRI', 'Revisión'];
+  const labels = [
+    'Información',
+    'Requisitos',
+    'Documentos',
+    'Material OCRI',
+    'Adicionales',
+    'Revisión',
+  ];
   return html`<aside class="wizard-route">
     <div class="eyebrow">Ruta de publicación</div>
-    <h3>Nueva convocatoria</h3>
+    <h3>
+      ${callDraft.direction === 'ENTRANTE' ? 'Convocatoria entrante · SGME' : 'Convocatoria saliente · SGMS'}
+    </h3>
     ${labels.map((label, index) => html`<button type="button" class="${callWizardStep === index + 1 ? 'active' : ''} ${callWizardStep > index + 1 ? 'done' : ''}" onclick="goCallWizardStep(${index + 1})"><span>0${index + 1}</span>${label}</button>`).join('')}
     <p>La convocatoria representa una universidad o convenio específico.</p>
   </aside>`;
@@ -3125,14 +3201,16 @@ function renderCallWizard() {
     wizardGuidelines,
     wizardDocuments,
     wizardMaterials,
+    wizardAdditional,
     wizardReview,
   ][callWizardStep - 1]();
   const titles = [
     '01 · Información general',
     '02 · Requisitos generales',
     '03 · Documentos a presentar',
-    '04 · Material OCRI e información importante',
-    '05 · Revisión y publicación',
+    '04 · Material OCRI',
+    '05 · Información adicional',
+    '06 · Revisión y publicación',
   ];
   const flowLabel = editingCallId ? 'Editar convocatoria' : 'Nueva convocatoria';
   const body = html`<div class="wizard-shell">
@@ -3183,7 +3261,9 @@ function wizardInformation() {
                   }</small
                 >
               </div>
-              <button type="button" onclick="callModal()">Cambiar PDF</button>
+              <button type="button" onclick="callModal('${callDraft.direction}')">
+                Cambiar PDF
+              </button>
             </div>
             ${
               importMeta.warnings.length
@@ -3203,31 +3283,21 @@ function wizardInformation() {
       título claro y uniforme.
     </p>
     <div class="form-grid">
-      <div class="field">
+      <div class="field wide">
         <label>Nombre de la convocatoria</label
-        ><input
-          class="input"
+        ><textarea
+          class="input call-title-editor"
           name="title"
-          value="${esc(callDraft.title)}"
+          rows="3"
           placeholder="Intercambio académico · PUCP"
           required
-        />
+        >
+${esc(callDraft.title)}</textarea>
       </div>
       <div class="field">
         <label>Periodo académico</label
         ><select class="input" name="period">
           ${periodOptions(callDraft.period)}
-        </select>
-      </div>
-      <div class="field">
-        <label>Flujo de movilidad</label
-        ><select class="input" name="direction" onchange="changeCallDirection(this.value)">
-          <option value="SALIENTE" ${callDraft.direction === 'SALIENTE' ? 'selected' : ''}>
-            SGMS · Saliente desde UNSAAC
-          </option>
-          <option value="ENTRANTE" ${callDraft.direction === 'ENTRANTE' ? 'selected' : ''}>
-            SGME · Entrante hacia UNSAAC
-          </option>
         </select>
       </div>
       <div class="field">
@@ -3264,7 +3334,7 @@ function wizardInformation() {
                   Nacional
                 </option></select
               ><small class="field-help"
-                >Cada estudiante puede realizar una nacional y una internacional en total.</small
+                >${callDraft.direction === 'ENTRANTE' ? 'Nacional: universidades del Perú. Internacional: universidades de otros países.' : 'Cada estudiante puede realizar una nacional y una internacional en total.'}</small
               >
             </div>`
           : ''
@@ -3297,6 +3367,7 @@ function wizardGuidelines() {
       ><textarea
         class="input guidelines-text"
         name="guidelines_text"
+        rows="12"
         placeholder="• Ser estudiante regular de la UNSAAC&#10;• Encontrarse entre el 5to y 8vo semestre&#10;• No haber realizado una movilidad incompatible"
         required
       >
@@ -3354,6 +3425,18 @@ function wizardDocuments() {
                       placeholder="Formato, firma, vigencia o detalle"
                     />
                   </div>
+                  <div class="field wide">
+                    <label
+                      >Enlace al formato o formulario <span class="muted">(opcional)</span></label
+                    >
+                    <input
+                      class="input"
+                      type="url"
+                      name="document_url_${index}"
+                      value="${esc(item.url || '')}"
+                      placeholder="https://…"
+                    />
+                  </div>
                 </div>
                 <button class="entry-remove" type="button" onclick="removeDocument(${index})">
                   ×
@@ -3374,9 +3457,70 @@ function noticeLinks(notice) {
       : [])
   );
 }
-function wizardMaterials() {
+function noticeEditorRows(kind) {
   const links = noticeLinks(callDraft.notice);
-  callDraft.notice.links = links;
+  const rows = links
+    .map((link, index) => ({ ...link, index }))
+    .filter((link) => (link.kind || 'ADDITIONAL') === kind);
+  return rows.length
+    ? rows
+        .map(
+          (link, position) =>
+            html`<div class="important-link-row">
+              <div class="field">
+                <label>${kind === 'IMPORTANT' ? 'Aviso' : 'Viñeta'} ${position + 1}</label>
+                <textarea
+                  class="input"
+                  name="notice_link_label_${link.index}"
+                  rows="3"
+                  placeholder="${kind === 'IMPORTANT' ? 'Ej. Presenta los documentos también en OCRI si corresponde' : 'Ej. Consulta los cursos de la sede elegida'}"
+                >
+${esc(link.label)}</textarea>
+              </div>
+              <div class="field">
+                <label>URL <span class="muted">(opcional)</span></label>
+                <input
+                  class="input"
+                  name="notice_link_url_${link.index}"
+                  value="${esc(link.url)}"
+                  placeholder="https://…"
+                />
+              </div>
+              <button
+                class="entry-remove"
+                type="button"
+                onclick="removeNoticeLink(${link.index})"
+                aria-label="Quitar ${kind === 'IMPORTANT' ? 'aviso' : 'viñeta'}"
+              >
+                ×
+              </button>
+            </div>`,
+        )
+        .join('')
+    : html`<div class="wizard-empty">
+        ${kind === 'IMPORTANT' ? 'No se detectaron avisos importantes. Agrégalos si aparecen en el brochure.' : 'Sin información adicional. Puedes dejar esta sección vacía.'}
+      </div>`;
+}
+function brochureGuidance(call, compact = false) {
+  const brochure = call?.resources?.find((item) =>
+    /brochure|folleto/i.test(`${item.description || ''} ${item.fileName || ''}`),
+  );
+  return html`<aside class="brochure-guidance ${compact ? 'brochure-guidance--compact' : ''}">
+    <div>
+      <strong>Revisa el brochure original antes de postular</strong>
+      <p>
+        ${brochure?.storagePath ? 'Descárgalo y léelo completo: ' : 'Solicítalo a OCRI si no está adjunto: '}
+        la información resumida en SIGMA puede no incluir todos los detalles.
+      </p>
+      <p>
+        ${['student', 'external'].includes(session?.role) ? 'Adjunta aquí los documentos solicitados.' : 'El postulante debe adjuntar aquí los documentos solicitados.'}
+        Si el brochure también exige una entrega presencial, deben presentarse ante OCRI siguiendo
+        sus indicaciones.
+      </p>
+    </div>
+  </aside>`;
+}
+function wizardMaterials() {
   return html`<p class="wizard-intro">
       Adjunta los archivos que OCRI desea compartir con las personas postulantes. La descripción es
       opcional.
@@ -3420,50 +3564,50 @@ function wizardMaterials() {
       }
     </div>
     <button type="button" class="btn btn-soft" onclick="addResource()">＋ Adjuntar material</button>
-    <div class="important-box">
-      <div class="eyebrow">Importante</div>
-      <div class="important-links">
-        ${
-          links
-            .map(
-              (link, index) =>
-                html`<div class="important-link-row">
-                  <div class="field">
-                    <label>Texto</label
-                    ><input
-                      class="input"
-                      name="notice_link_label_${index}"
-                      value="${esc(link.label)}"
-                      placeholder="Ej. Revisa el calendario académico"
-                    />
-                  </div>
-                  <div class="field">
-                    <label>URL <span class="muted">(opcional)</span></label
-                    ><input
-                      class="input"
-                      name="notice_link_url_${index}"
-                      value="${esc(link.url)}"
-                      placeholder="https://…"
-                    />
-                  </div>
-                  <button
-                    class="entry-remove"
-                    type="button"
-                    onclick="removeNoticeLink(${index})"
-                    aria-label="Quitar información"
-                  >
-                    ×
-                  </button>
-                </div>`,
-            )
-            .join('') || '<div class="wizard-empty">Aún no agregaste información importante.</div>'
-        }
+    <section class="important-box important-box--notices">
+      <div>
+        <div class="eyebrow">Importante del brochure</div>
+        <p class="field-help">
+          Revisa estos avisos antes de publicar. Puedes corregirlos, quitarlos o añadir otros; no
+          son archivos adjuntos.
+        </p>
       </div>
+      <div class="important-links">${noticeEditorRows('IMPORTANT')}</div>
+      <button type="button" class="btn btn-soft btn-sm" onclick="addNoticeLink('IMPORTANT')">
+        ＋ Añadir aviso importante
+      </button>
+    </section>
+    ${wizardActions('Continuar a adicionales', 'goCallWizardStep(5)', 'Volver', 'goCallWizardStep(3)')}`;
+}
+function wizardAdditional() {
+  return html`<p class="wizard-intro">
+      Esta sección es opcional. Úsala para explicar el proceso de postulación u otros pasos que no
+      correspondan a requisitos, documentos ni avisos importantes. Si el brochure no tiene más
+      información, déjala vacía.
+    </p>
+    <div class="important-box">
+      <div class="eyebrow">Adicionales</div>
+      <div class="field">
+        <label for="notice-description">Descripción <span class="muted">(opcional)</span></label>
+        <textarea
+          class="input additional-description"
+          id="notice-description"
+          name="notice_description"
+          rows="4"
+          placeholder="Ej. Antes de completar la solicitud, elige una sede y consulta los cursos disponibles."
+        >
+${esc(callDraft.notice.description || '')}</textarea>
+      </div>
+      <div class="additional-list-heading">
+        <strong>Pasos o viñetas</strong>
+        <span>Se mostrarán en el mismo orden.</span>
+      </div>
+      <div class="important-links">${noticeEditorRows('ADDITIONAL')}</div>
       <button type="button" class="btn btn-soft btn-sm" onclick="addNoticeLink()">
-        ＋ Añadir información importante
+        ＋ Añadir viñeta
       </button>
     </div>
-    ${wizardActions('Revisar convocatoria', 'goCallWizardStep(5)', 'Volver', 'goCallWizardStep(3)')}`;
+    ${wizardActions('Revisar convocatoria', 'goCallWizardStep(6)', 'Volver', 'goCallWizardStep(4)')}`;
 }
 function wizardReview() {
   const deadline = callDraft.end ? shortDate(callDraft.end) : 'Pendiente de completar';
@@ -3486,9 +3630,15 @@ function wizardReview() {
     [
       'Material OCRI',
       true,
-      callDraft.resources.length
-        ? `${callDraft.resources.length} material(es) compartido(s).`
-        : 'Sin materiales adicionales.',
+      `${callDraft.resources.length} archivo(s) · ${noticeLinks(callDraft.notice).filter((item) => item.kind === 'IMPORTANT' && item.label).length} aviso(s) importante(s).`,
+    ],
+    [
+      'Adicionales',
+      true,
+      callDraft.notice.description ||
+      noticeLinks(callDraft.notice).some((item) => item.kind !== 'IMPORTANT' && item.label)
+        ? `${callDraft.notice.description ? 'Descripción' : 'Sin descripción'} · ${noticeLinks(callDraft.notice).filter((item) => item.kind !== 'IMPORTANT' && item.label).length} viñeta(s).`
+        : 'Sin información adicional.',
     ],
   ];
   const ready = checks.slice(0, 3).every((check) => check[1]);
@@ -3523,13 +3673,10 @@ function wizardReview() {
     </div>
     <div class="publication-note">
       <strong>Resumen final de publicación</strong
-      ><span
-        >Se publicarán requisitos, documentos solicitados, materiales OCRI e información
-        importante.</span
-      >
+      ><span>Se publicarán requisitos, documentos solicitados, materiales OCRI y adicionales.</span>
     </div>
     <div class="modal-actions">
-      <button type="button" class="btn btn-soft" onclick="goCallWizardStep(4)">Volver</button
+      <button type="button" class="btn btn-soft" onclick="goCallWizardStep(5)">Volver</button
       ><button type="button" class="btn btn-soft" onclick="saveCallDraft('BORRADOR')">
         Guardar borrador</button
       ><button
@@ -3560,11 +3707,6 @@ function goCallWizardStep(step) {
   )
     return toast('Completa al menos un documento a presentar.');
   callWizardStep = step;
-  renderCallWizard();
-}
-function changeCallDirection(direction) {
-  syncCallDraft();
-  callDraft.direction = direction;
   renderCallWizard();
 }
 function changeCallActivityType(activityType) {
@@ -3602,7 +3744,7 @@ function selectCallResource(input, index) {
 }
 function addDocument() {
   syncCallDraft();
-  callDraft.documents.push({ title: '', description: '', required: true });
+  callDraft.documents.push({ title: '', description: '', required: true, url: '' });
   renderCallWizard();
 }
 function removeDocument(index) {
@@ -3620,9 +3762,9 @@ function removeResource(index) {
   callDraft.resources.splice(index, 1);
   renderCallWizard();
 }
-function addNoticeLink() {
+function addNoticeLink(kind = 'ADDITIONAL') {
   syncCallDraft();
-  callDraft.notice.links.push({ label: '', url: '' });
+  callDraft.notice.links.push({ label: '', url: '', kind });
   renderCallWizard();
 }
 function removeNoticeLink(index) {
@@ -3655,6 +3797,11 @@ async function prepareCallAssets() {
 
 async function saveCallDraft(status) {
   syncCallDraft();
+  const invalidLink = [
+    ...callDraft.documents.map((item) => item.url),
+    ...noticeLinks(callDraft.notice).map((item) => item.url),
+  ].some((value) => value && !/^https?:\/\/\S+$/i.test(value));
+  if (invalidLink) return toast('Los enlaces deben comenzar con https:// o http://.');
   const valid =
     callDraft.title &&
     callDraft.end &&
@@ -3674,7 +3821,28 @@ async function saveCallDraft(status) {
       ),
       status,
     };
-    const { error } = await supabase.rpc('admin_upsert_classified_call', { payload });
+    let { error } = await supabase.rpc('admin_upsert_categorized_call', { payload });
+    if (error?.code === 'PGRST202') {
+      if (noticeLinks(payload.notice).some((item) => item.kind === 'IMPORTANT'))
+        throw new Error(
+          'Falta aplicar la migración de avisos importantes en este entorno de Supabase.',
+        );
+      ({ error } = await supabase.rpc('admin_upsert_enriched_call', { payload }));
+    }
+    if (error?.code === 'PGRST202') {
+      if (payload.notice.description)
+        throw new Error(
+          'Falta aplicar la migración de descripción de Adicionales en este entorno de Supabase.',
+        );
+      ({ error } = await supabase.rpc('admin_upsert_linked_call', { payload }));
+    }
+    if (error?.code === 'PGRST202') {
+      if (payload.documents.some((item) => item.url))
+        throw new Error(
+          'Falta aplicar la migración de enlaces de documentos en este entorno de Supabase.',
+        );
+      ({ error } = await supabase.rpc('admin_upsert_classified_call', { payload }));
+    }
     if (error) throw error;
     editingCallId = null;
     await loadCallsFromDatabase();
@@ -3693,12 +3861,71 @@ async function saveCallDraft(status) {
     toast(`No se pudo guardar la convocatoria: ${error.message}`);
   }
 }
-function showCallSummary(id) {
-  const call = state.calls.find((c) => c.id === id);
-  if (!call) return;
-  const application = state.applications.find(
-    (item) => item.callId === call.id && item.applicantId === session.userId,
-  );
+function callReadingSteps(call) {
+  return [
+    { key: 'requirements', label: 'Requisitos' },
+    { key: 'documents', label: 'Documentos' },
+    { key: 'materials', label: 'Material e indicaciones OCRI' },
+    ...(call?.notice?.description?.trim() ||
+    noticeLinks(call?.notice).some((item) => item.label && item.kind !== 'IMPORTANT')
+      ? [{ key: 'additional', label: 'Adicionales' }]
+      : []),
+  ];
+}
+
+function callReadingNavigation(call, active, application = false) {
+  const steps = callReadingSteps(call);
+  return html`<nav class="call-reading-nav" aria-label="Secciones de la convocatoria">
+    ${steps.map((step, index) => html`<button type="button" class="${index === active ? 'active' : ''}" ${index === active ? 'aria-current="step"' : ''} onclick="${application ? `changeApplicationReadingStep(${index})` : `changeCallReadingStep('${call.id}', ${index})`}"><span>${String(index + 1).padStart(2, '0')}</span>${esc(step.label)}</button>`).join('')}
+  </nav>`;
+}
+
+function readingControls(call, active, application = false) {
+  const steps = callReadingSteps(call);
+  const last = active === steps.length - 1;
+  const progress = application ? applicationProgress() : null;
+  const acceptsSubmissions =
+    !application || applicationDraft.status === 'OBSERVADA' || callLifecycle(call || {}).open;
+  const handler = (index) =>
+    application
+      ? `changeApplicationReadingStep(${index})`
+      : `changeCallReadingStep('${call.id}', ${index})`;
+  return html`${application && last ? html`<p class="application-final-note" role="status">${!acceptsSubmissions ? 'Esta convocatoria ya no recibe postulaciones.' : progress.complete ? `Todo listo: ${progress.completed} de ${progress.total} documentos obligatorios adjuntos. Puedes enviar tu postulación.` : 'Antes de enviar, completa tus datos académicos y los documentos obligatorios en el paso Documentos.'}</p>` : ''}
+    <div class="call-reading-controls">
+      <button
+        type="button"
+        class="btn btn-soft"
+        onclick="${handler(active - 1)}"
+        ${active === 0 ? 'disabled' : ''}
+      >
+        Anterior
+      </button>
+      <div class="call-reading-secondary">
+        <small>Paso ${active + 1} de ${steps.length}</small>
+        ${application ? html`<button type="button" class="btn btn-quiet" onclick="saveApplicationDraftAndExit()">Guardar y salir</button>` : ''}
+      </div>
+      ${!last ? html`<button type="button" class="btn btn-primary" onclick="${handler(active + 1)}">Siguiente: ${esc(steps[active + 1].label)}</button>` : application ? html`<button type="button" class="btn btn-primary" onclick="submitStudentApplication()" ${progress.complete && acceptsSubmissions ? '' : 'disabled'}>Enviar postulación</button>` : '<span></span>'}
+    </div>`;
+}
+
+function changeCallReadingStep(id, index) {
+  const call = state.calls.find((item) => item.id === id);
+  const container = $('#callReadingView');
+  if (!call || !container || !callReadingSteps(call)[index]) return;
+  container.innerHTML = callReadingView(call, index);
+  container.scrollIntoView({ block: 'start' });
+  container.querySelector('[aria-current="step"]')?.focus({ preventScroll: true });
+}
+
+function callReadingView(call, index = 0) {
+  return html`${callReadingNavigation(call, index)}
+    <div class="call-reading-panel">
+      ${callInformation(call, { section: callReadingSteps(call)[index].key })}${readingControls(call, index)}
+    </div>`;
+}
+
+function callInformation(call, { compact = false, section = null } = {}) {
+  if (!call) return '';
   const bullets =
     (call.guidelines || []).map((item) => html`<li>${esc(item)}</li>`).join('') ||
     '<li>Sin requisitos generales.</li>';
@@ -3711,6 +3938,7 @@ function showCallSummary(id) {
             ><span
               >${item.required ? 'Obligatorio' : 'Opcional'}${item.description ? ` · ${esc(item.description)}` : ''}</span
             >
+            ${item.url ? html`<a class="call-document-link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Abrir formato o formulario ↗</a>` : ''}
           </li>`,
       )
       .join('') || '<li>No hay documentos configurados.</li>';
@@ -3735,23 +3963,108 @@ function showCallSummary(id) {
           </li>`,
       )
       .join('') || '<li>No se proporcionaron materiales adicionales.</li>';
-  const links = noticeLinks(call.notice).filter((item) => item.label);
-  const notice = links.length
-    ? html`<div class="publication-note">
-        <strong>Importante</strong>
-        <ul class="notice-links">
-          ${links.map((link) => html`<li>${link.url ? html`<a href="${esc(link.url)}" target="_blank" rel="noreferrer">${esc(link.label)}</a>` : esc(link.label)}</li>`).join('')}
-        </ul>
-      </div>`
-    : '';
+  const importantLinks = noticeLinks(call.notice).filter(
+    (item) => item.label && item.kind === 'IMPORTANT',
+  );
+  const links = noticeLinks(call.notice).filter((item) => item.label && item.kind !== 'IMPORTANT');
+  const important = html`<aside class="call-important-notice">
+    <h4>Importante</h4>
+    ${
+      importantLinks.length
+        ? html`<ul class="summary-list additional-bullets">
+            ${importantLinks.map((link) => html`<li><span>${esc(link.label)}</span>${link.url ? html`<a class="call-document-link" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Abrir enlace ↗</a>` : ''}</li>`).join('')}
+          </ul>`
+        : '<p class="call-detail-empty">Sin avisos adicionales registrados. Revisa el brochure original.</p>'
+    }
+  </aside>`;
+  const notice = html`<section class="call-detail-section call-detail-additional">
+    <span class="call-detail-number">05</span>
+    <div>
+      <h3>Adicionales</h3>
+      ${call.notice?.description ? html`<p class="additional-introduction">${esc(call.notice.description)}</p>` : ''}
+      ${
+        links.length
+          ? html`<ul class="summary-list additional-bullets">
+              ${links.map((link) => html`<li><span>${esc(link.label)}</span>${link.url ? html`<a class="call-document-link" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Abrir enlace ↗</a>` : ''}</li>`).join('')}
+            </ul>`
+          : ''
+      }
+      ${!links.length && !call.notice?.description ? '<p class="call-detail-empty">Sin información adicional registrada.</p>' : ''}
+    </div>
+  </section>`;
+  return html`<div
+    class="call-detail-content ${compact ? 'call-detail-content--compact' : ''} ${section ? 'call-detail-content--step' : ''}"
+  >
+    <div class="call-detail-columns">
+      ${
+        !section || section === 'requirements'
+          ? html`<section class="call-detail-section">
+              <span class="call-detail-number">02</span>
+              <div>
+                <h3>Requisitos generales</h3>
+                <ul class="summary-list">
+                  ${bullets}
+                </ul>
+              </div>
+            </section>`
+          : ''
+      }
+      ${
+        !section || section === 'documents'
+          ? html`<section class="call-detail-section">
+              <span class="call-detail-number">03</span>
+              <div>
+                <h3>Documentos a presentar</h3>
+                <ul class="summary-list">
+                  ${documents}
+                </ul>
+              </div>
+            </section>`
+          : ''
+      }
+    </div>
+    ${
+      !section || section === 'materials'
+        ? html`<section class="call-detail-section call-detail-materials">
+            <span class="call-detail-number">04</span>
+            <div>
+              <h3>Material proporcionado por OCRI</h3>
+              <ul class="summary-list">
+                ${resources}
+              </ul>
+              ${brochureGuidance(call, compact)} ${important}
+            </div>
+          </section>`
+        : ''
+    }
+    ${!section || section === 'additional' ? notice : ''}
+  </div>`;
+}
+
+function showCallSummary(id) {
+  const call = state.calls.find((c) => c.id === id);
+  if (!call) return;
+  const lifecycle = callLifecycle(call);
+  const application = state.applications.find(
+    (item) => item.callId === call.id && item.applicantId === session.userId,
+  );
+  const hasSubmittedApplications = state.applications.some(
+    (item) => item.callId === call.id && item.status !== 'BORRADOR',
+  );
+  const hasNominations = state.nominations.some((item) => item.callId === call.id);
   const adminActions =
     session?.role === 'admin'
-      ? html`<button class="btn btn-soft" onclick="editCall('${call.id}')">
-            Editar convocatoria
-          </button>
-          <button class="btn btn-danger" onclick="deleteCall('${call.id}')">
+      ? html`${lifecycle.expired && !lifecycle.concluded && call.status !== 'BORRADOR' ? html`<button class="btn btn-primary" onclick="setCallLifecycle('${call.id}', 'conclude')">Marcar como concluida</button>` : ''}
+          ${lifecycle.concluded ? html`<button class="btn btn-soft" onclick="setCallLifecycle('${call.id}', '${lifecycle.archived ? 'restore' : 'archive'}')">${lifecycle.archived ? 'Desarchivar' : 'Archivar'}</button>` : ''}
+          <button class="btn btn-soft" onclick="editCall('${call.id}')">Editar convocatoria</button>
+          <button
+            class="btn btn-danger"
+            onclick="deleteCall('${call.id}')"
+            ${hasSubmittedApplications || hasNominations ? 'disabled title="No se puede eliminar una convocatoria con postulaciones enviadas o nominaciones"' : ''}
+          >
             Eliminar convocatoria
-          </button>`
+          </button>
+          ${hasSubmittedApplications || hasNominations ? html`<small class="call-delete-note">Esta convocatoria ya tiene postulaciones enviadas o nominaciones y no se puede eliminar.</small>` : ''}`
       : '';
   const activeStudentApplication =
     session?.role === 'student' ? getActiveStudentApplication() : null;
@@ -3788,14 +4101,14 @@ function showCallSummary(id) {
               >
                 ${/RECHAZAD|NO_ACEPTADO/.test(application.status) ? 'Ver resultado' : 'Ver mi postulación'}
               </button>`
-            : html`<button class="btn btn-primary" onclick="startApplication('${call.id}')">
-                ${application ? 'Continuar postulación' : 'Postular'}
-              </button>`
+            : !lifecycle.open
+              ? html`<span class="badge neutral">${esc(lifecycle.label)}</span>`
+              : html`<button class="btn btn-primary" onclick="startApplication('${call.id}')">
+                  ${application ? 'Continuar postulación' : 'Postular'}
+                </button>`
       : '';
   const managerAction =
-    session?.role === 'external_manager' &&
-    call.direction === 'ENTRANTE' &&
-    call.status === 'ACTIVA'
+    session?.role === 'external_manager' && call.direction === 'ENTRANTE' && lifecycle.open
       ? html`<button class="btn btn-primary" onclick="nominationModal('${call.id}')">
           Nominar estudiante
         </button>`
@@ -3807,7 +4120,8 @@ function showCallSummary(id) {
     html`<div class="call-detail-hero ${call.coverImage ? 'has-image' : ''}" ${coverStyle}>
         <div class="call-detail-overlay"></div>
         <div class="call-detail-flags">
-          ${badge(call.status)}${badge(call.direction)}<span class="badge neutral"
+          <span class="badge neutral">${esc(lifecycle.label)}</span>${badge(call.direction)}<span
+            class="badge neutral"
             >${esc(
               call.activityType === 'MOVILIDAD'
                 ? `Movilidad ${call.mobilityScope.toLowerCase()}`
@@ -3825,38 +4139,7 @@ function showCallSummary(id) {
           <h2>${esc(call.title)}</h2>
         </div>
       </div>
-      <div class="call-detail-content">
-        <div class="call-detail-columns">
-          <section class="call-detail-section">
-            <span class="call-detail-number">01</span>
-            <div>
-              <h3>Requisitos generales</h3>
-              <ul class="summary-list">
-                ${bullets}
-              </ul>
-            </div>
-          </section>
-          <section class="call-detail-section">
-            <span class="call-detail-number">02</span>
-            <div>
-              <h3>Documentos a presentar</h3>
-              <ul class="summary-list">
-                ${documents}
-              </ul>
-            </div>
-          </section>
-        </div>
-        <section class="call-detail-section call-detail-materials">
-          <span class="call-detail-number">03</span>
-          <div>
-            <h3>Material proporcionado por OCRI</h3>
-            <ul class="summary-list">
-              ${resources}
-            </ul>
-          </div>
-        </section>
-        ${notice}
-      </div>
+      <div id="callReadingView" class="call-reading-layout">${callReadingView(call)}</div>
       <div class="call-detail-actions">
         ${
           application?.status === 'BORRADOR'
@@ -3875,6 +4158,13 @@ function showCallSummary(id) {
         </div>
       </div>`,
     'call-publication-dialog',
+  );
+}
+function documentSourceUrl(callId, requirementId) {
+  return (
+    state.calls
+      .find((call) => call.id === callId)
+      ?.documents?.find((document) => document.requirementId === requirementId)?.url || ''
   );
 }
 async function downloadCallResource(callId, storagePath) {
@@ -3898,7 +4188,7 @@ async function deleteCall(id) {
   if (!call || session?.role !== 'admin') return;
   if (
     !confirm(
-      `¿Eliminar definitivamente la convocatoria “${call.title}”? También se eliminarán sus requisitos, documentos y materiales.`,
+      `¿Eliminar definitivamente la convocatoria “${call.title}”? También se eliminarán sus borradores, requisitos, documentos y materiales. No se podrá recuperar.`,
     )
   )
     return;
@@ -3907,24 +4197,72 @@ async function deleteCall(id) {
     call.coverImagePath,
     ...(call.resources || []).map((item) => item.storagePath),
   ].filter(Boolean);
-  const { error } = await supabase.rpc('admin_delete_call', { target_call_id: id });
+  const { data: draftPaths, error } = await supabase.rpc('admin_delete_call_with_drafts', {
+    target_call_id: id,
+  });
   if (error) return toast(`No se pudo eliminar la convocatoria: ${error.message}`);
 
-  if (assetPaths.length) {
-    const { error: storageError } = await supabase.storage.from('call-assets').remove(assetPaths);
-    if (storageError)
-      console.warn('No se pudieron eliminar algunos archivos:', storageError.message);
-  }
+  const [assetsResult, draftsResult] = await Promise.all([
+    assetPaths.length
+      ? supabase.storage.from('call-assets').remove(assetPaths)
+      : Promise.resolve({ error: null }),
+    draftPaths?.length
+      ? supabase.storage.from('application-documents').remove(draftPaths)
+      : Promise.resolve({ error: null }),
+  ]);
+  if (assetsResult.error || draftsResult.error)
+    console.warn('No se pudieron eliminar algunos archivos de la convocatoria.', {
+      assets: assetsResult.error?.message,
+      drafts: draftsResult.error?.message,
+    });
 
-  await loadCallsFromDatabase();
+  await Promise.all([loadCallsFromDatabase(), loadApplicationsFromDatabase()]);
   closeModal();
   render();
-  toast('Convocatoria eliminada.');
+  toast(
+    assetsResult.error || draftsResult.error
+      ? 'Convocatoria eliminada, pero algunos archivos requieren limpieza manual.'
+      : 'Convocatoria y borradores eliminados.',
+  );
 }
-function filterCards(v) {
+async function setCallLifecycle(id, action) {
+  if (session?.role !== 'admin') return;
+  const call = state.calls.find((item) => item.id === id);
+  if (!call) return;
+  const changes =
+    action === 'conclude'
+      ? { concluded_at: new Date().toISOString() }
+      : { archived_at: action === 'archive' ? new Date().toISOString() : null };
+  const { data, error } = await supabase
+    .from('calls')
+    .update(changes)
+    .eq('id', id)
+    .select('id')
+    .single();
+  if (error || !data)
+    return toast(`No se pudo actualizar la convocatoria: ${error?.message || 'Sin permisos'}`);
+  await loadCallsFromDatabase();
+  if (action === 'archive' || action === 'restore') {
+    closeModal();
+    render();
+    toast(action === 'archive' ? 'Convocatoria archivada.' : 'Convocatoria desarchivada.');
+    return;
+  }
+  render();
+  showCallSummary(id);
+}
+function filterCards() {
+  const v = $('#callDirectionFilter')?.value || '';
+  const archive = $('#callArchiveFilter')?.value || 'current';
   document
     .querySelectorAll('.call-card')
-    .forEach((e) => e.classList.toggle('hidden', v && e.dataset.direction !== v));
+    .forEach((e) =>
+      e.classList.toggle(
+        'hidden',
+        Boolean(v && e.dataset.direction !== v) ||
+          (archive !== 'all' && e.dataset.archived !== String(archive === 'archived')),
+      ),
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -3946,11 +4284,8 @@ function nominationLetterSection(application) {
     session.role === 'admin' && ['ADMITIDO_UNSAAC', 'NOMINADO_UNSAAC'].includes(application.status);
   return html`<section class="card operational-section nomination-letter-section">
     <div>
-      <span class="eyebrow">Paso institucional</span>
       <h3>Oficio de nominación UNSAAC</h3>
-      <p>
-        ${application.status === 'ADMITIDO_UNSAAC' ? 'El estudiante ya fue admitido por la UNSAAC. OCRI debe adjuntar el oficio para formalizar su nominación.' : 'La nominación fue formalizada ante la universidad de destino.'}
-      </p>
+      ${application.status === 'ADMITIDO_UNSAAC' ? '<p class="muted">Adjunta el oficio para formalizar la nominación.</p>' : ''}
     </div>
     <div class="operational-file-actions">
       ${
@@ -4026,18 +4361,13 @@ function acceptanceLetterSection(a) {
   const canValidate = admin && a.letter?.status === 'PENDIENTE';
   return html`<section class="card operational-section">
     <h3>Carta de aceptación · Universidad de destino</h3>
-    <p>
-      Luego de la nominación, el estudiante adjunta la carta emitida por la universidad de destino.
-      OCRI debe validarla antes de aceptar el expediente.
-    </p>
     ${
       a.letter
         ? html`<p>${esc(a.letter.file_name)} · ${badge(a.letter.status)}</p>
-            <p>${esc(a.letter.comment)}</p>
             <button class="btn btn-soft" onclick="downloadAcceptanceLetter('${a.id}')">
               Descargar carta
             </button>`
-        : `<p class="muted">${isNominated ? 'Esperando la carta de aceptación de la universidad de destino.' : 'Aún no corresponde cargar una carta en esta etapa.'}</p>`
+        : `<p class="muted">${isNominated ? 'Pendiente de adjuntar por el estudiante.' : 'Disponible después de la nominación.'}</p>`
     }
     ${canStudentUpload ? html`<label class="btn btn-primary">${a.letter ? 'Reemplazar carta PDF' : 'Subir carta PDF'}<input type="file" class="visually-hidden" accept="application/pdf" onchange="uploadAcceptanceLetter('${a.id}',this)" /></label>` : ''}
     ${canValidate ? html`<button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',true)">Validar aceptación</button><button class="btn btn-soft" onclick="reviewAcceptanceLetter('${a.id}',false)">Solicitar corrección</button>` : ''}
@@ -4048,8 +4378,14 @@ function incomingOfficialDocumentsSection(application) {
   if (application.direction !== 'ENTRANTE') return '';
   const declined = application.status === 'RECHAZADA';
   const observed = application.status === 'OBSERVADA';
-  const accepted = ['ADMITIDO_UNSAAC', 'EN_MOVILIDAD', 'FINALIZADA'].includes(application.status);
-  if (!declined && !observed && !accepted) return '';
+  const submitted = application.status === 'ENVIADA';
+  const accepted = [
+    'ADMITIDO_UNSAAC',
+    'MATRICULA_HABILITADA',
+    'EN_MOVILIDAD',
+    'FINALIZADA',
+  ].includes(application.status);
+  if (!declined && !observed && !accepted && !submitted) return '';
   const admin = session.role === 'admin';
   const official = application.incomingOfficialDocuments || [];
   const resolution = official.find((document) => document.document_type === 'RESOLUCION_MATRICULA');
@@ -4057,7 +4393,19 @@ function incomingOfficialDocumentsSection(application) {
   const subsanationGuide = official.find(
     (document) => document.document_type === 'GUIA_SUBSANACION',
   );
+  const certificate = official.find(
+    (document) => document.document_type === 'CERTIFICADO_ESTUDIOS',
+  );
   const acceptance = application.letter;
+  const canEdit = (kind) =>
+    admin &&
+    ((kind === 'ACEPTACION_UNSAAC' &&
+      ['ENVIADA', 'OBSERVADA', 'ADMITIDO_UNSAAC'].includes(application.status)) ||
+      (kind === 'RESOLUCION_MATRICULA' &&
+        ['ADMITIDO_UNSAAC', 'MATRICULA_HABILITADA'].includes(application.status)) ||
+      (kind === 'CERTIFICADO_ESTUDIOS' && application.status === 'EN_MOVILIDAD') ||
+      (kind === 'CARTA_NO_APTO' && declined) ||
+      (kind === 'GUIA_SUBSANACION' && observed));
   const row = (label, document, kind, bucket) =>
     html`<article class="official-document-row ${document ? 'is-uploaded' : 'is-pending'}">
       <div class="doc-icon ${document ? 'doc-icon--has-file' : 'doc-icon--pending'}">
@@ -4067,63 +4415,72 @@ function incomingOfficialDocumentsSection(application) {
         <strong>${label}</strong
         ><small>${document ? esc(document.file_name) : 'Pendiente de adjuntar por OCRI'}</small>
       </div>
-      ${document ? html`<span class="official-document-status">Adjunto</span><button class="btn btn-sm btn-soft" onclick="downloadIncomingOfficialDocument('${application.id}','${kind}','${bucket}')">Ver archivo</button>` : admin ? html`<label class="btn btn-sm btn-primary">Adjuntar PDF<input class="visually-hidden" type="file" accept="application/pdf" onchange="uploadIncomingOfficialDocument('${application.id}','${kind}',this)" /></label>` : html`<span class="official-document-status is-pending">Pendiente</span>`}
+      <div class="official-document-actions">
+        ${document ? html`<button type="button" class="btn btn-sm btn-soft" onclick="downloadIncomingOfficialDocument('${application.id}','${kind}','${bucket}')">Ver archivo</button>` : ''}
+        ${canEdit(kind) ? html`<label class="btn btn-sm btn-primary">${document ? 'Reemplazar PDF' : kind === 'ACEPTACION_UNSAAC' ? 'Adjuntar carta y aceptar' : kind === 'RESOLUCION_MATRICULA' ? 'Adjuntar resolución' : kind === 'CERTIFICADO_ESTUDIOS' ? 'Adjuntar certificado' : 'Adjuntar PDF'}<input class="visually-hidden" type="file" accept="application/pdf,.pdf" onchange="uploadIncomingOfficialDocument('${application.id}','${kind}',this)" /></label>` : !document ? html`<span class="official-document-status is-pending">Pendiente</span>` : ''}
+      </div>
     </article>`;
   return html`<section class="card operational-section incoming-official-documents">
     <div class="incoming-documents-heading">
       <div>
-        <span class="eyebrow">Documentación OCRI</span>
-        <h3>
-          ${observed ? 'Apoyo para subsanar' : declined ? 'Resultado de evaluación' : 'Documentos para la movilidad'}
-        </h3>
+        <h3>${declined ? 'Resultado de evaluación' : 'Documentos oficiales OCRI'}</h3>
       </div>
-      <p>
-        ${observed ? 'OCRI puede adjuntar un formato o guía para ayudar al estudiante a corregir lo observado.' : declined ? 'La carta oficial comunica el motivo registrado en el expediente.' : 'La carta acredita la aceptación. La resolución permite la matrícula y la generación del código UNSAAC.'}
-      </p>
     </div>
     <div class="official-document-list">
       ${observed ? row('Guía o formato para la subsanación (opcional)', subsanationGuide, 'GUIA_SUBSANACION', 'incoming-official-documents') : ''}
       ${declined ? row('Carta de no aptitud UNSAAC', noAptitud, 'CARTA_NO_APTO', 'incoming-official-documents') : ''}
-      ${accepted ? row('Carta de aceptación UNSAAC', acceptance, 'ACEPTACION_UNSAAC', 'acceptance-letters') : ''}
-      ${accepted ? row('Resolución de matrícula y código', resolution, 'RESOLUCION_MATRICULA', 'incoming-official-documents') : ''}
+      ${!declined ? row('Carta de aceptación UNSAAC', acceptance, 'ACEPTACION_UNSAAC', 'acceptance-letters') : ''}
+      ${accepted ? row('Resolución de matrícula', resolution, 'RESOLUCION_MATRICULA', 'incoming-official-documents') : ''}
+      ${['EN_MOVILIDAD', 'FINALIZADA'].includes(application.status) ? row('Certificado de estudios UNSAAC', certificate, 'CERTIFICADO_ESTUDIOS', 'incoming-official-documents') : ''}
     </div>
-    ${admin && accepted && application.status === 'ADMITIDO_UNSAAC' ? html`<p class="muted incoming-mobility-hint">Para registrar “En movilidad”, adjunta la carta de aceptación y la resolución.</p>` : ''}
-    ${application.status === 'FINALIZADA' ? html`<div class="application-concluded-note"><strong>Movilidad entrante concluida</strong><span>El historial y los documentos oficiales permanecen disponibles en el expediente.</span></div>` : ''}
+    ${!admin && application.status === 'FINALIZADA' ? html`<div class="application-concluded-note"><strong>Expediente concluido</strong></div>` : ''}
   </section>`;
 }
 
 async function uploadIncomingOfficialDocument(id, kind, input) {
   const file = input.files?.[0];
   if (!file) return;
-  if (file.type !== 'application/pdf' || file.size > 10485760)
+  if (
+    (file.type && file.type !== 'application/pdf') ||
+    !/\.pdf$/i.test(file.name) ||
+    file.size > 10485760
+  )
     return toast('Selecciona un PDF de hasta 10 MB.');
   input.disabled = true;
+  const label = input.closest('label');
+  label?.setAttribute('aria-busy', 'true');
+  toast('Subiendo documento…');
   try {
     const bucket =
       kind === 'ACEPTACION_UNSAAC' ? 'acceptance-letters' : 'incoming-official-documents';
     const folder = kind === 'ACEPTACION_UNSAAC' ? '' : `${kind}/`;
     const path = `${id}/${folder}${crypto.randomUUID()}.pdf`;
-    const { error: uploadError } = await supabase.storage.from(bucket).upload(path, file);
+    const { error: uploadError } = await supabase.storage
+      .from(bucket)
+      .upload(path, file, { contentType: 'application/pdf' });
     if (uploadError) throw uploadError;
-    const { error } =
-      kind === 'ACEPTACION_UNSAAC'
-        ? await supabase.rpc('save_incoming_acceptance_letter', {
-            target: id,
-            path,
-            filename: file.name,
-          })
-        : await supabase.rpc('save_incoming_official_document', {
-            target: id,
-            kind,
-            path,
-            filename: file.name,
-          });
+    const { error } = await supabase.rpc('admin_save_incoming_document', {
+      target: id,
+      kind,
+      path,
+      filename: file.name,
+      note: '',
+    });
     if (error) throw error;
     await refreshLetterView(id);
-    toast('Documento oficial adjuntado al expediente.');
+    toast(
+      kind === 'ACEPTACION_UNSAAC'
+        ? 'Carta adjunta. Estudiante aceptado por UNSAAC.'
+        : kind === 'RESOLUCION_MATRICULA'
+          ? 'Resolución adjunta. Matrícula habilitada.'
+          : 'Documento oficial adjuntado al expediente.',
+    );
   } catch (error) {
-    toast(error.message);
+    toast(`No se pudo guardar el documento: ${error.message}`);
     input.disabled = false;
+    input.value = '';
+  } finally {
+    label?.removeAttribute('aria-busy');
   }
 }
 
@@ -4148,30 +4505,18 @@ async function downloadIncomingOfficialDocument(id, kind, bucket) {
 function returnDocumentationSection(a) {
   if (a.direction !== 'SALIENTE' || !['DOCUMENTACION_RETORNO', 'FINALIZADA'].includes(a.status))
     return '';
-  if (a.status === 'FINALIZADA')
-    return html`<section class="card application-concluded-note">
-      <strong>Expediente concluido satisfactoriamente</strong>
-      <span>OCRI validó la convalidación de cursos y el certificado de estudios.</span>
-    </section>`;
   const labels = {
-    CONVALIDACION_CURSOS: 'Convalidación de cursos',
+    CONVALIDACION_CURSOS: 'Resolución de convalidación de cursos de la UNSAAC',
     CERTIFICADO_ESTUDIOS: 'Certificado de estudios de destino',
   };
   const documents = Object.keys(labels).map((kind) =>
     a.returnDocuments?.find((document) => document.document_type === kind),
   );
-  const canConclude = documents.every(
-    (document, index) =>
-      document?.status === 'VALIDADA' && (index || Number(document.validated_credits) >= 12),
-  );
   return html`<section class="card operational-section">
     <h3>
       ${session.role === 'student' ? 'Tu documentación obligatoria de retorno' : 'Documentación de retorno'}
     </h3>
-    <p>
-      Para concluir la movilidad se requiere la convalidación de cursos (mínimo 12 créditos) y el
-      certificado de estudios.
-    </p>
+    ${a.status === 'DOCUMENTACION_RETORNO' ? '<p>Adjunta el certificado de estudios y la resolución de convalidación de la UNSAAC (mínimo 12 créditos).</p>' : ''}
     ${Object.entries(labels)
       .map(([kind, label], index) => {
         const document = documents[index];
@@ -4180,14 +4525,40 @@ function returnDocumentationSection(a) {
           <div class="doc-main">
             <strong>${label}</strong
             ><small
-              >${document?.file_name || 'Pendiente de adjuntar'}${kind === 'CONVALIDACION_CURSOS' && document?.validated_credits != null ? ` · ${document.validated_credits} créditos validados` : ''}</small
+              >${esc(document?.file_name || 'Pendiente de adjuntar')}${kind === 'CONVALIDACION_CURSOS' && document?.validated_credits != null ? ` · ${document.validated_credits} créditos validados` : ''}</small
             >
           </div>
           ${document ? badge(document.status) : badge('PENDIENTE')}${document?.storage_path ? html`<button class="btn btn-sm btn-soft" onclick="downloadReturnDocument('${a.id}','${kind}')">Ver archivo</button>` : ''}${session.role === 'student' && a.status === 'DOCUMENTACION_RETORNO' ? html`<label class="btn btn-sm btn-primary">${document ? 'Reemplazar' : 'Subir PDF'}<input class="visually-hidden" type="file" accept="application/pdf" onchange="uploadReturnDocument('${a.id}','${kind}',this)" /></label>` : ''}${session.role === 'admin' && a.status === 'DOCUMENTACION_RETORNO' && document ? html`<button class="btn btn-sm btn-soft" onclick="reviewReturnDocument('${a.id}','${kind}',true)">Validar</button><button class="btn btn-sm btn-soft" onclick="reviewReturnDocument('${a.id}','${kind}',false)">Observar</button>` : ''}
         </div>`;
       })
       .join('')}
-    ${session.role === 'admin' && a.status === 'DOCUMENTACION_RETORNO' ? html`<div class="return-conclusion-actions"><span>${canConclude ? 'Los dos documentos cumplen los requisitos.' : 'Valida ambos documentos y confirma al menos 12 créditos para habilitar el cierre.'}</span><button class="btn btn-primary" ${canConclude ? '' : 'disabled'} onclick="concludeMobility('${a.id}')">Concluir expediente satisfactoriamente</button></div>` : ''}
+  </section>`;
+}
+function returnConclusionActions(application) {
+  const convalidation = application.returnDocuments?.find(
+    (item) => item.document_type === 'CONVALIDACION_CURSOS',
+  );
+  const certificate = application.returnDocuments?.find(
+    (item) => item.document_type === 'CERTIFICADO_ESTUDIOS',
+  );
+  const ready =
+    convalidation?.status === 'VALIDADA' &&
+    Number(convalidation.validated_credits) >= 12 &&
+    certificate?.status === 'VALIDADA';
+  return html`<section class="admin-status-panel">
+    ${adminStatusFlow(application)}
+    <div class="return-conclusion-actions">
+      <span
+        >${ready ? 'Documentos validados. El expediente está listo para concluir.' : 'Valida los dos documentos y un mínimo de 12 créditos convalidados para concluir.'}</span
+      >
+      <button
+        class="btn btn-primary"
+        ${ready ? '' : 'disabled'}
+        onclick="concludeMobility('${application.id}')"
+      >
+        Concluir expediente
+      </button>
+    </div>
   </section>`;
 }
 async function uploadReturnDocument(id, kind, input) {
@@ -4227,8 +4598,6 @@ async function downloadReturnDocument(id, kind) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 async function reviewReturnDocument(id, kind, approved) {
-  const feedback = approved ? '' : prompt('Indica la observación:');
-  if (feedback === null) return;
   const credits =
     kind === 'CONVALIDACION_CURSOS' && approved ? prompt('Créditos convalidados:') : null;
   if (credits === null && kind === 'CONVALIDACION_CURSOS' && approved) return;
@@ -4236,7 +4605,7 @@ async function reviewReturnDocument(id, kind, approved) {
     target: id,
     kind,
     approved,
-    feedback: feedback || '',
+    feedback: '',
     credits: credits === null ? null : Number(credits),
   });
   if (error) return toast(error.message);
@@ -4292,12 +4661,10 @@ async function downloadAcceptanceLetter(id) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 async function reviewAcceptanceLetter(id, approved) {
-  const feedback = approved ? '' : prompt('Indica qué debe corregirse:');
-  if (feedback === null || (!approved && !feedback.trim())) return;
   const { error } = await supabase.rpc('review_acceptance_letter', {
     target: id,
     approved,
-    feedback,
+    feedback: '',
   });
   if (error) return toast(error.message);
   await refreshLetterView(id);
@@ -4403,15 +4770,18 @@ function detailModal(id) {
             <span class="modal-head-call">${esc(a.callTitle)}</span>
           </div>
           <h2>${a.displayId || a.id}</h2>
-          <p class="muted">${esc(a.student)}</p>
         </div>
         <div class="modal-head-actions">
+          ${applicationBadge(a)}
           ${session.role === 'admin' ? html`<button class="btn btn-soft btn-sm" onclick="downloadApplicationArchive('${a.id}',this)">Descargar expediente ZIP</button>` : ''}
           <button class="modal-close" onclick="closeModal()" aria-label="Cerrar">×</button>
         </div>
-        ${applicationBadge(a)}
       </div>
-      ${applicationDetail(a)}${nominationLetterSection(a)}${acceptanceLetterSection(a)}${incomingOfficialDocumentsSection(a)}${returnDocumentationSection(a)}${
+      ${applicationDetail(a)}
+      <div class="expedient-stage-documents">
+        ${nominationLetterSection(a)}${acceptanceLetterSection(a)}${incomingOfficialDocumentsSection(a)}${returnDocumentationSection(a)}
+      </div>
+      ${
         session.role === 'admin'
           ? a.status === 'FINALIZADA' ||
             a.status === 'CONCLUIDO' ||
@@ -4421,35 +4791,33 @@ function detailModal(id) {
                 <strong
                   >${a.direction === 'ENTRANTE' && a.status === 'RECHAZADA' ? 'No apto por UNSAAC' : a.status === 'CANCELADO' ? 'Expediente cancelado' : 'Expediente concluido'}</strong
                 >
-                <span
-                  >${a.direction === 'ENTRANTE' ? 'El resultado es definitivo. El expediente y su historial permanecen disponibles.' : 'Este es el estado de cierre definitivo del flujo.'}</span
-                >
               </section>`
-            : html`<section class="admin-status-panel">
-                <div class="admin-status-panel-head">
-                  <div>
-                    <span class="eyebrow">Gestión OCRI</span>
-                    <h3>Actualizar estado</h3>
+            : a.direction === 'SALIENTE' && a.status === 'DOCUMENTACION_RETORNO'
+              ? returnConclusionActions(a)
+              : html`<section class="admin-status-panel">
+                  <div class="admin-status-panel-head">
+                    <div>
+                      <h3>Actualizar estado</h3>
+                    </div>
+                  </div>
+                  <div class="modal-actions">
+                    <div class="status-change-control">
+                      <span class="field-caption">Estado</span>
+                      <div class="status-choice-grid">${applicationStatusOptions(a)}</div>
+                      <small id="statusExplanation"></small>
+                      <input
+                        id="appStatusNote"
+                        class="input status-note-input"
+                        maxlength="280"
+                        placeholder="Comentario opcional para el historial"
+                      />
+                    </div>
+                    <button class="btn btn-primary" onclick="changeAppStatus('${a.id}')">
+                      Guardar estado
+                    </button>
                   </div>
                   ${adminStatusFlow(a)}
-                </div>
-                <div class="modal-actions">
-                  <div class="status-change-control">
-                    <span class="field-caption">Selecciona el siguiente estado</span>
-                    <div class="status-choice-grid">${applicationStatusOptions(a)}</div>
-                    <small id="statusExplanation">${esc(statusDescription(a.status, a))}</small>
-                    <input
-                      id="appStatusNote"
-                      class="input status-note-input"
-                      maxlength="280"
-                      placeholder="Comentario opcional para el historial"
-                    />
-                  </div>
-                  <button class="btn btn-primary" onclick="changeAppStatus('${a.id}')">
-                    Guardar estado
-                  </button>
-                </div>
-              </section>`
+                </section>`
           : ''
       }`,
     'application-detail-dialog',
@@ -4459,9 +4827,10 @@ function applicationStatusOptions(application) {
   if (application.direction === 'ENTRANTE') {
     const routes = {
       BORRADOR: ['BORRADOR', 'ENVIADA'],
-      ENVIADA: ['ENVIADA', 'OBSERVADA', 'RECHAZADA', 'ADMITIDO_UNSAAC'],
-      OBSERVADA: ['OBSERVADA', 'RECHAZADA', 'ADMITIDO_UNSAAC'],
-      ADMITIDO_UNSAAC: ['ADMITIDO_UNSAAC', 'EN_MOVILIDAD', 'CANCELADO'],
+      ENVIADA: ['ENVIADA', 'OBSERVADA', 'RECHAZADA'],
+      OBSERVADA: ['OBSERVADA', 'RECHAZADA'],
+      ADMITIDO_UNSAAC: ['ADMITIDO_UNSAAC', 'CANCELADO'],
+      MATRICULA_HABILITADA: ['MATRICULA_HABILITADA', 'EN_MOVILIDAD', 'CANCELADO'],
       EN_MOVILIDAD: ['EN_MOVILIDAD', 'FINALIZADA', 'CANCELADO'],
       RECHAZADA: ['RECHAZADA'],
       FINALIZADA: ['FINALIZADA'],
@@ -4476,6 +4845,7 @@ function applicationStatusOptions(application) {
               type="radio"
               name="appStatus"
               value="${status}"
+              ${status === 'FINALIZADA' && !application.incomingOfficialDocuments?.some((document) => document.document_type === 'CERTIFICADO_ESTUDIOS' && document.storage_path) ? 'disabled title="Adjunta el certificado de estudios para concluir"' : ''}
               ${status === application.status ? 'checked' : ''}
               onchange="updateStatusExplanation(this.value, '${application.id}')"
             />
@@ -4532,11 +4902,45 @@ function applicationStatusOptions(application) {
     .join('');
 }
 function adminStatusFlow(application) {
+  const currentKinds = {
+    BORRADOR: 'draft',
+    ENVIADA: 'submitted',
+    EN_REVISION_DOCUMENTAL: 'submitted',
+    OBSERVADA: 'warning',
+    RECHAZADA: 'not-eligible',
+    APROBADA_OCRI: 'admitted',
+    ADMITIDO_UNSAAC: 'admitted',
+    NOMINADO_UNSAAC: 'nomination',
+    EN_EVALUACION_DESTINO: 'nomination',
+    CARTA_PENDIENTE: 'letter',
+    NO_ACEPTADO_DESTINO: 'not-accepted',
+    ACEPTADO: 'accepted',
+    EN_MOVILIDAD: 'mobility',
+    DOCUMENTACION_RETORNO: 'review',
+    FINALIZADA: 'final',
+    FINALIZADO: 'final',
+    CONCLUIDO: 'final',
+  };
+  const statusFlowCard = (kind, title, description) => {
+    const key =
+      kind === 'stopped' ? (title.includes('No apto') ? 'not-eligible' : 'not-accepted') : kind;
+    return renderStatusFlowCard(
+      kind,
+      title,
+      description,
+      (application.direction === 'ENTRANTE' && application.status === 'MATRICULA_HABILITADA'
+        ? 'enrollment'
+        : currentKinds[application.status]) === key,
+    );
+  };
   if (application.direction === 'ENTRANTE') {
     return html`<details class="admin-status-flow">
       <summary>
-        <span>Flujo SGME <small>Proceso simple · toca cada fase para ver el detalle</small></span>
-        <span class="expand-affordance">Mostrar flujo <b>⌄</b></span>
+        <span>Mapa de estados SGME</span>
+        <span class="expand-affordance"
+          ><span class="flow-toggle-closed">Ver mapa</span
+          ><span class="flow-toggle-open">Ocultar mapa</span><b>⌄</b></span
+        >
       </summary>
       <div class="admin-status-flow-content flow-map flow-map--incoming">
         <div class="flow-sequence-row flow-sequence-start">
@@ -4548,28 +4952,30 @@ function adminStatusFlow(application) {
         <div class="status-flow-branches status-flow-branches--incoming">
           ${statusFlowCard('warning', 'Subsanación', 'OCRI deja un comentario claro y puede adjuntar un formato. El estudiante corrige y vuelve a Postulado.')}
           ${statusFlowCard('stopped', 'No apto', 'OCRI registra el motivo y adjunta la carta oficial de no aptitud. El expediente queda cerrado en el historial.')}
-          ${statusFlowCard('admitted', 'Aceptado por UNSAAC', 'OCRI adjunta la carta oficial de aceptación y la resolución de matrícula/código. Son documentos del expediente, no estados nuevos.')}
+          ${statusFlowCard('admitted', 'Aceptado por UNSAAC', 'OCRI adjunta la carta oficial de aceptación. El expediente cambia automáticamente a Aceptado por UNSAAC.')}
         </div>
         <div class="flow-vertical-connector main-path">
-          <span>↓</span><strong>Con carta y resolución adjuntas</strong>
+          <span>↓</span><strong>OCRI adjunta la resolución</strong>
         </div>
+        <div class="flow-sequence-row flow-single-stage">
+          ${statusFlowCard('enrollment', 'Resolución y código emitidos', 'OCRI adjuntó la resolución de matrícula que contiene el código asignado. El expediente está listo para iniciar la movilidad.')}
+        </div>
+        <div class="flow-vertical-connector"><span>↓</span><strong>Inicio del periodo</strong></div>
         <div class="flow-sequence-row status-flow-continuation status-flow-continuation--incoming">
           ${statusFlowCard('mobility', 'En movilidad', 'OCRI registra el inicio del periodo una vez que el estudiante puede matricularse en la UNSAAC.')}
           <span class="flow-arrow" aria-hidden="true">→</span>
-          ${statusFlowCard('final', 'Concluido', 'Al terminar el periodo, OCRI cierra el expediente y conserva su historial y documentos.')}
+          ${statusFlowCard('final', 'Concluido', 'OCRI adjunta el certificado de estudios con los cursos y notas del estudiante y concluye el expediente. Los documentos y el historial permanecen disponibles.')}
         </div>
-        <p class="status-flow-note">
-          <strong>Comentarios y archivos:</strong> el comentario es opcional en cada cambio. En
-          subsanación describe lo pendiente; en aceptación y no apto se adjuntan los documentos
-          oficiales correspondientes.
-        </p>
       </div>
     </details>`;
   }
   return html`<details class="admin-status-flow">
     <summary>
-      <span>Mapa del flujo <small>Toca cada estado para ver su descripción</small></span>
-      <span class="expand-affordance">Mostrar mapa <b>⌄</b></span>
+      <span>Mapa de estados</span>
+      <span class="expand-affordance"
+        ><span class="flow-toggle-closed">Ver mapa</span
+        ><span class="flow-toggle-open">Ocultar mapa</span><b>⌄</b></span
+      >
     </summary>
     <div class="admin-status-flow-content flow-map">
       <div class="flow-sequence-row flow-sequence-start" aria-label="Inicio del flujo">
@@ -4604,7 +5010,7 @@ function adminStatusFlow(application) {
         <span class="flow-arrow" aria-hidden="true">→</span>
         ${statusFlowCard('mobility', '7. En movilidad', 'La estancia académica ya comenzó en el periodo correspondiente.')}
         <span class="flow-arrow" aria-hidden="true">→</span>
-        ${statusFlowCard('review', '8. Documentación de retorno', 'Al volver, se exige convalidación de cursos y certificado de estudios.')}
+        ${statusFlowCard('review', '8. Documentación de retorno', 'Al volver, se exige la resolución de convalidación de cursos de la UNSAAC y el certificado de estudios de destino.')}
         <span class="flow-arrow" aria-hidden="true">→</span>
         ${statusFlowCard('final', '9. Concluido', 'OCRI valida ambos documentos y, como mínimo, 12 créditos convalidados.')}
       </div>
@@ -4615,15 +5021,18 @@ function adminStatusFlow(application) {
     </div>
   </details>`;
 }
-function statusFlowCard(kind, title, description) {
+function renderStatusFlowCard(kind, title, description, current = false) {
   return html`<button
-    class="flow-card ${kind}"
+    class="flow-card ${kind} ${current ? 'is-current' : ''}"
+    ${current ? 'aria-current="step"' : ''}
     type="button"
     onclick="this.classList.toggle('is-flipped')"
     aria-label="${esc(title)}. Toca para ver la descripción."
   >
     <span class="flow-card-inner"
-      ><span class="flow-card-face"><strong>${esc(title)}</strong><small>Ver detalle</small></span
+      ><span class="flow-card-face"
+        ><strong>${esc(title)}</strong
+        ><small>${current ? 'Estado actual · Ver detalle' : 'Ver detalle'}</small></span
       ><span class="flow-card-back">${esc(description)}</span></span
     >
   </button>`;
@@ -4638,9 +5047,12 @@ function statusDescription(status, application = null) {
         'OCRI indicó qué debe corregirse. El estudiante actualiza los documentos y vuelve a enviar.',
       RECHAZADA: 'La postulación no cumple los requisitos. OCRI adjunta la carta de no aptitud.',
       ADMITIDO_UNSAAC:
-        'La UNSAAC aceptó al estudiante. OCRI adjunta la carta de aceptación y la resolución de matrícula/código.',
+        'OCRI emitió la carta de aceptación. Falta adjuntar la resolución de matrícula.',
+      MATRICULA_HABILITADA:
+        'La resolución de matrícula está adjunta. OCRI puede indicar el inicio de la movilidad.',
       EN_MOVILIDAD: 'El estudiante ya inició su movilidad en la UNSAAC.',
-      FINALIZADA: 'La movilidad entrante terminó y OCRI cerró el expediente.',
+      FINALIZADA:
+        'OCRI adjuntó el certificado de estudios y cerró el expediente de movilidad entrante.',
       CANCELADO: 'El expediente se canceló y queda conservado en el historial.',
     };
     if (descriptions[status]) return descriptions[status];
@@ -4691,7 +5103,7 @@ async function withdrawStudentApplication(id) {
 function nominationModal(preselectedCallId = '') {
   if (session.role !== 'external_manager') return;
   const inboundCalls = state.calls.filter(
-    (call) => call.direction === 'ENTRANTE' && call.status === 'ACTIVA',
+    (call) => call.direction === 'ENTRANTE' && callLifecycle(call).open,
   );
   if (!inboundCalls.length)
     return toast('No hay convocatorias SGME activas para registrar una nominación.');
@@ -4752,7 +5164,7 @@ async function createNomination(e) {
   const f = Object.fromEntries(new FormData(e.target));
   if (!session.university) return toast('Tu cuenta necesita una universidad asignada.');
   const call = state.calls.find(
-    (item) => item.id === f.callId && item.direction === 'ENTRANTE' && item.status === 'ACTIVA',
+    (item) => item.id === f.callId && item.direction === 'ENTRANTE' && callLifecycle(item).open,
   );
   if (!call) return toast('Selecciona una convocatoria SGME activa.');
   const submit = e.submitter;
@@ -4778,6 +5190,11 @@ async function createNomination(e) {
   );
 }
 async function startApplication(callId) {
+  const correcting = getStudentApplications().some(
+    (app) => app.callId === callId && app.status === 'OBSERVADA',
+  );
+  if (!correcting && !callLifecycle(state.calls.find((call) => call.id === callId) || {}).open)
+    return toast('Esta convocatoria ya no recibe postulaciones.');
   closeModal();
   const rejectedApplication = getStudentApplications().find((application) =>
     /RECHAZAD|NO_ACEPTADO/.test(application.status),
@@ -4807,7 +5224,7 @@ async function startApplication(callId) {
     session.photoPath = currentProfile.photo_path;
   }
   const call = state.calls.find(
-    (item) => item.id === callId && item.direction === 'SALIENTE' && item.status === 'ACTIVA',
+    (item) => item.id === callId && item.direction === 'SALIENTE' && callLifecycle(item).open,
   );
   if (!call) return toast('La convocatoria ya no está disponible para postular.');
 
@@ -4835,6 +5252,7 @@ async function startApplication(callId) {
   );
 
   pendingApplicationFiles.clear();
+  applicationReadingStep = 0;
   applicationDraft = {
     id: existing?.id || '',
     callId,
@@ -4851,6 +5269,7 @@ async function startApplication(callId) {
           requirementId: document.requirementId,
           name: document.title,
           required: document.required,
+          url: document.url || '',
           storagePath: '',
           fileName: '',
           status: 'PENDIENTE',
@@ -4884,6 +5303,7 @@ async function startIncomingApplication(application) {
   );
 
   pendingApplicationFiles.clear();
+  applicationReadingStep = 0;
   applicationDraft = {
     id: application.id,
     callId: application.callId,
@@ -4928,13 +5348,11 @@ function applicationNavigation() {
   return html`<aside class="wizard-route application-route">
     <div class="eyebrow">Postulación ${applicationDraft.isIncoming ? 'SGME' : 'SGMS'}</div>
     <h3>${esc(applicationDraft.callTitle)}</h3>
-    <div class="application-route-summary">
-      <span>01</span>
-      <div>
-        <strong>Documentos</strong>
-        <small>Completa tus datos académicos y adjunta el expediente solicitado.</small>
-      </div>
-    </div>
+    ${callReadingNavigation(
+      state.calls.find((item) => item.id === applicationDraft.callId),
+      applicationReadingStep,
+      true,
+    )}
     <div class="application-draft-note">
       <strong>${applicationDraft.isIncoming ? 'Nominación verificada' : 'Borrador privado'}</strong>
       <span
@@ -4944,7 +5362,19 @@ function applicationNavigation() {
   </aside>`;
 }
 
+function changeApplicationReadingStep(index) {
+  const call = state.calls.find((item) => item.id === applicationDraft?.callId);
+  if (!callReadingSteps(call)[index]) return;
+  syncApplicationDraft();
+  applicationReadingStep = index;
+  renderApplicationWizard();
+  $('#modal')?.scrollTo({ top: 0 });
+  $('#applicationStepHeading')?.focus({ preventScroll: true });
+}
+
 function renderApplicationWizard() {
+  const call = state.calls.find((item) => item.id === applicationDraft.callId);
+  const step = callReadingSteps(call)[applicationReadingStep];
   const body = html`<div class="wizard-shell">
     <header class="wizard-header">
       <div class="wizard-header-start">
@@ -4964,13 +5394,18 @@ function renderApplicationWizard() {
             <div class="eyebrow">
               ${applicationDraft.isIncoming ? 'SGME' : 'SGMS'} / ${esc(applicationDraft.callTitle)}
             </div>
-            <h2>Postulación y documentos</h2>
+            <h2 id="applicationStepHeading" tabindex="-1">${esc(step.label)}</h2>
           </div>
-          <button class="wizard-exit" onclick="saveApplicationDraftAndExit()">
-            Guardar y salir
-          </button>
         </div>
-        <form id="applicationWizardForm" onsubmit="return false">${applicationForm()}</form>
+        ${call ? html`<p class="call-reading-meta">${esc(call.period)} · Cierre ${shortDate(call.end)} · ${esc(opportunityLabel(call))}</p>` : ''}
+        ${
+          step.key === 'documents'
+            ? html`<form id="applicationWizardForm" onsubmit="return false">
+                ${applicationForm()}
+              </form>`
+            : callInformation(call, { compact: true, section: step.key })
+        }
+        ${readingControls(call, applicationReadingStep, true)}
       </section>
     </div>
   </div>`;
@@ -4981,20 +5416,27 @@ function renderApplicationWizard() {
   } else modal(body, 'application-wizard');
 }
 
+function applicationProgress() {
+  const required = applicationDraft.documents.filter((document) => document.required);
+  const completed = required.filter(
+    (document) => document.storagePath || pendingApplicationFiles.has(document.requirementId),
+  ).length;
+  return {
+    total: required.length,
+    completed,
+    complete: Boolean(
+      applicationDraft.facultyCode && applicationDraft.schoolCode && completed === required.length,
+    ),
+  };
+}
+
 function applicationForm() {
+  const call = state.calls.find((item) => item.id === applicationDraft.callId);
+  const callDocuments = new Map((call?.documents || []).map((item) => [item.requirementId, item]));
   const selectedFaculty = academicCatalog.find(
     (faculty) => faculty.code === applicationDraft.facultyCode,
   );
   const schools = selectedFaculty?.schools || [];
-  const requiredDocuments = applicationDraft.documents.filter((document) => document.required);
-  const completedRequired = requiredDocuments.filter(
-    (document) => document.storagePath || pendingApplicationFiles.has(document.requirementId),
-  ).length;
-  const complete = Boolean(
-    applicationDraft.facultyCode &&
-    applicationDraft.schoolCode &&
-    completedRequired === requiredDocuments.length,
-  );
 
   return html`<div class="application-profile-strip">
       <span class="sidebar-avatar">
@@ -5049,8 +5491,8 @@ function applicationForm() {
       <div class="application-section-heading">
         <span>02</span>
         <div>
-          <h3>Documentos a presentar</h3>
-          <p>Adjunta únicamente los archivos solicitados por OCRI.</p>
+          <h3>Adjuntar documentos</h3>
+          <p>Sube aquí los documentos que aparecen en la información de la convocatoria.</p>
         </div>
       </div>
       <div class="application-document-list">
@@ -5060,15 +5502,18 @@ function applicationForm() {
                 .map((document, index) => {
                   const pendingFile = pendingApplicationFiles.get(document.requirementId);
                   const fileName = pendingFile?.name || document.fileName;
+                  const description = callDocuments.get(document.requirementId)?.description;
                   return html`<article class="application-document ${fileName ? 'is-ready' : ''}">
                     <div class="application-document-icon">
                       ${fileName ? '✓' : String(index + 1).padStart(2, '0')}
                     </div>
                     <div class="application-document-copy">
                       <strong>${esc(document.name)}</strong>
+                      ${description ? html`<span class="application-document-description">${esc(description)}</span>` : ''}
                       <small
                         >${document.required ? 'Obligatorio' : 'Opcional'}${fileName ? ` · ${esc(fileName)}` : ' · Pendiente de adjuntar'}</small
                       >
+                      ${documentSourceUrl(applicationDraft.callId, document.requirementId) ? html`<a class="call-document-link" href="${esc(documentSourceUrl(applicationDraft.callId, document.requirementId))}" target="_blank" rel="noopener noreferrer">Abrir formato o formulario ↗</a>` : ''}
                     </div>
                     <label class="btn btn-soft btn-sm application-upload-button">
                       ${fileName ? 'Reemplazar' : 'Adjuntar'}
@@ -5087,30 +5532,7 @@ function applicationForm() {
       <p class="application-security-note">
         Los archivos son privados y solo podrán verlos tú y el personal autorizado de OCRI.
       </p>
-    </section>
-    <div class="application-submit-panel">
-      <div>
-        <strong
-          >${complete ? 'Tu postulación está lista' : 'Tu borrador todavía está incompleto'}</strong
-        >
-        <p>
-          ${complete ? `${completedRequired} de ${requiredDocuments.length} documentos obligatorios listos para enviar.` : 'Selecciona la facultad y carrera profesional, y adjunta todos los documentos obligatorios. Puedes guardar y continuar después.'}
-        </p>
-      </div>
-      <button
-        class="btn btn-primary"
-        type="button"
-        onclick="submitStudentApplication()"
-        ${complete ? '' : 'disabled'}
-      >
-        Enviar postulación
-      </button>
-    </div>
-    <div class="modal-actions application-wizard-actions">
-      <button class="btn btn-soft" type="button" onclick="saveApplicationDraftAndExit()">
-        Guardar y continuar después
-      </button>
-    </div>`;
+    </section>`;
 }
 
 function changeApplicationFaculty(facultyCode) {
@@ -5220,6 +5642,16 @@ async function persistApplicationDraft() {
 }
 
 async function saveApplicationDraftAndExit() {
+  syncApplicationDraft();
+  if (
+    !applicationDraft.id &&
+    !applicationDraft.facultyCode &&
+    !applicationDraft.schoolCode &&
+    !pendingApplicationFiles.size
+  ) {
+    closeModal();
+    return;
+  }
   const saved = await persistApplicationDraft();
   if (!saved) return;
   closeModal();
@@ -5228,6 +5660,11 @@ async function saveApplicationDraftAndExit() {
 }
 
 async function submitStudentApplication() {
+  if (
+    applicationDraft.status !== 'OBSERVADA' &&
+    !callLifecycle(state.calls.find((call) => call.id === applicationDraft.callId) || {}).open
+  )
+    return toast('Esta convocatoria ya no recibe postulaciones.');
   syncApplicationDraft();
   if (!applicationDraft.facultyCode || !applicationDraft.schoolCode)
     return toast('Selecciona tu facultad y escuela profesional.');
@@ -5325,6 +5762,8 @@ async function boot() {
   });
 }
 Object.assign(window, {
+  changeCallReadingStep,
+  changeApplicationReadingStep,
   $,
   login,
   showLoginForm,
@@ -5346,7 +5785,6 @@ Object.assign(window, {
   analyzeCallBrochure,
   editCall,
   goCallWizardStep,
-  changeCallDirection,
   changeCallActivityType,
   selectCallCover,
   selectCallResource,
@@ -5358,6 +5796,7 @@ Object.assign(window, {
   removeNoticeLink,
   saveCallDraft,
   showCallSummary,
+  setCallLifecycle,
   downloadCallResource,
   deleteCall,
   filterCards,
@@ -5371,6 +5810,8 @@ Object.assign(window, {
   uploadAcceptanceLetter,
   downloadAcceptanceLetter,
   reviewAcceptanceLetter,
+  uploadIncomingOfficialDocument,
+  downloadIncomingOfficialDocument,
   uploadReturnDocument,
   downloadReturnDocument,
   reviewReturnDocument,

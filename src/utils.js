@@ -10,6 +10,7 @@ const STATUS_LABELS = {
   OBSERVADA: 'Subsanación requerida',
   APROBADA_OCRI: 'Listo para nominación',
   ADMITIDO_UNSAAC: 'Admitido por UNSAAC',
+  MATRICULA_HABILITADA: 'Resolución y código emitidos',
   FINALIZADA: 'Concluido',
   BORRADOR: 'Borrador',
   POSTULADO: 'Postulado',
@@ -38,6 +39,8 @@ const STATUS_LABELS = {
 };
 
 const STATUS_DESCRIPTIONS = {
+  MATRICULA_HABILITADA:
+    'OCRI adjuntó la resolución de matrícula con el código UNSAAC. El expediente está listo para iniciar la movilidad entrante.',
   BORRADOR: 'La postulación existe, pero todavía no fue enviada a OCRI.',
   ENVIADA: 'El estudiante envió su expediente y OCRI puede iniciar la revisión.',
   EN_REVISION_DOCUMENTAL: 'Estado heredado; OCRI debe decidir directamente desde Postulado.',
@@ -56,7 +59,7 @@ const STATUS_DESCRIPTIONS = {
   ACEPTADO: 'El estudiante cargó la carta de aceptación y puede continuar el trámite.',
   EN_MOVILIDAD: 'El periodo de movilidad académica ya está en curso.',
   DOCUMENTACION_RETORNO:
-    'Al retornar, el estudiante debe cargar su convalidación de cursos y certificado de estudios para el cierre.',
+    'Al retornar, el estudiante debe cargar la resolución de convalidación de cursos de la UNSAAC y el certificado de estudios de destino para el cierre.',
   FINALIZADA: 'La movilidad académica concluyó.',
   RECHAZADA:
     'El postulante no es apto para esta convocatoria. El motivo queda registrado en el historial.',
@@ -125,6 +128,12 @@ export function isClosedApplication(application) {
 
 export function isOperationalApplication(application) {
   return application.status !== 'BORRADOR' && !isClosedApplication(application);
+}
+
+export function matchesExpedientStatus(application, status = '') {
+  if (status === 'CONCLUIDOS')
+    return /^(FINALIZADA|FINALIZADO|CONCLUIDO)$/.test(application.status);
+  return isOperationalApplication(application) && (!status || application.status === status);
 }
 
 export function successfulMobilityHistory(application, allApplications) {

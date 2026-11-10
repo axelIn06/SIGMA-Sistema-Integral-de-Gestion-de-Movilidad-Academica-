@@ -8,6 +8,7 @@ import {
   badge,
   isClosedApplication,
   isOperationalApplication,
+  matchesExpedientStatus,
   successfulMobilityHistory,
   mobilityEligibility,
   canStudentWithdrawApplication,
@@ -18,6 +19,19 @@ import {
   pendingApplications,
   applicationsInMobility,
 } from '../src/utils.js';
+
+test('el filtro Concluidos incluye cierres y mantiene privados los borradores', () => {
+  for (const status of ['FINALIZADA', 'FINALIZADO', 'CONCLUIDO']) {
+    assert.equal(matchesExpedientStatus({ status }, 'CONCLUIDOS'), true);
+    assert.equal(matchesExpedientStatus({ status }), false);
+  }
+  for (const status of ['BORRADOR', 'RECHAZADA', 'CANCELADO', 'ENVIADA']) {
+    assert.equal(matchesExpedientStatus({ status }, 'CONCLUIDOS'), false);
+  }
+  assert.equal(matchesExpedientStatus({ status: 'BORRADOR' }), false);
+  assert.equal(matchesExpedientStatus({ status: 'ENVIADA' }), true);
+  assert.equal(matchesExpedientStatus({ status: 'ENVIADA' }, 'EN_MOVILIDAD'), false);
+});
 
 const sampleApplication = (overrides = {}) => ({
   id: '123e4567-e89b-12d3-a456-426614174000',

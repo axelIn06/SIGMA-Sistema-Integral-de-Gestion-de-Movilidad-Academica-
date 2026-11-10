@@ -22,15 +22,15 @@ const topics = [
     ],
     answer: (context) =>
       context.direction === 'ENTRANTE'
-        ? 'Al terminar tu movilidad en la UNSAAC, coordina con OCRI y tu universidad de origen los documentos académicos de cierre. OCRI registra la conclusión del expediente entrante. La exigencia de 12 créditos convalidados corresponde a estudiantes UNSAAC en movilidad saliente.'
-        : 'Al terminar la movilidad, sube dos archivos: la convalidación de cursos (debe acreditar al menos 12 créditos) y el certificado de estudios de la universidad de destino. OCRI revisará ambos; el expediente se concluye cuando los dos tengan visto bueno.',
+        ? 'Al terminar tu movilidad en la UNSAAC, OCRI emite y adjunta tu certificado de estudios con los cursos y notas. Este documento es obligatorio para concluir el expediente y queda disponible para consultarlo. La exigencia de 12 créditos convalidados corresponde a estudiantes UNSAAC en movilidad saliente.'
+        : 'Al terminar la movilidad, sube dos archivos: la resolución de convalidación de cursos de la UNSAAC (debe acreditar al menos 12 créditos) y el certificado de estudios de la universidad de destino. OCRI revisará ambos; el expediente se concluye cuando los dos tengan visto bueno.',
   },
   {
     id: 'letter',
     terms: ['carta de aceptacion', 'carta', 'aceptacion', 'validar carta'],
     answer: (context) =>
       context.direction === 'ENTRANTE'
-        ? 'En movilidad entrante, OCRI registra la aceptación por UNSAAC y adjunta tu carta oficial de aceptación. También debe adjuntar la resolución de matrícula antes de iniciar la movilidad. Si el resultado es “No apto”, OCRI adjunta el documento correspondiente.'
+        ? 'En movilidad entrante, OCRI adjunta tu carta oficial y el expediente pasa a “Aceptado por UNSAAC”. Después adjunta la resolución de matrícula que contiene tu código UNSAAC: aparece “Resolución y código emitidos”. Luego OCRI indica el inicio de la movilidad. Si el resultado es “No apto”, OCRI adjunta la carta correspondiente.'
         : 'Subir la carta no confirma la aceptación automáticamente. OCRI verifica que sea válida y recién entonces actualiza el expediente a “Aceptado”. Si la universidad no te aceptó, OCRI registra ese resultado.',
   },
   {
@@ -77,7 +77,7 @@ const topics = [
     terms: ['flujo', 'proceso', 'pasos', 'que sigue', 'como funciona', 'etapas'],
     answer: (context) =>
       context.direction === 'ENTRANTE'
-        ? 'En SGME, la universidad de origen nomina al estudiante; este completa sus datos académicos UNSAAC y documentos; OCRI evalúa y puede pedir subsanación, declarar no apto o aceptarlo. OCRI adjunta la carta de aceptación y la resolución de matrícula, registra el inicio de la movilidad y finalmente concluye el expediente.'
+        ? 'En SGME, la universidad de origen nomina al estudiante; este completa sus datos académicos UNSAAC y documentos; OCRI evalúa y puede pedir subsanación, declarar no apto o adjuntar la carta para aceptarlo. Después adjunta la resolución de matrícula, indica el inicio de la movilidad y finalmente concluye el expediente.'
         : 'En SGMS, el estudiante completa y envía la postulación; OCRI puede pedir subsanación, marcarla como no apta o admitir al estudiante por UNSAAC. Tras adjuntar el oficio se espera la respuesta de destino y OCRI valida la carta de aceptación. Durante y al volver de movilidad se registran los documentos y la conclusión del expediente.',
   },
   {

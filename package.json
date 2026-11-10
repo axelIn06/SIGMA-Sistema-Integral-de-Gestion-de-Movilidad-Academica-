@@ -11,6 +11,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test tests/*.test.mjs",
+    "test:db:local": "supabase db query --local --file tests/call-notices.local.sql",
+    "test:db:local:deletion": "supabase db query --local --file tests/call-deletion.local.sql",
+    "test:sgme:local": "node tests/incoming-upload.local.mjs",
     "test:coverage": "node --test --experimental-test-coverage tests/*.test.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

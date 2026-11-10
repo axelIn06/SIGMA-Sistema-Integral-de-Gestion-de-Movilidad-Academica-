@@ -52,13 +52,16 @@ test('la ayuda entrante conserva la explicación del expediente y no pide una ca
   assert.doesNotMatch(answer, /formalizar la nominación/);
   assert.match(
     answerHelpQuestion('carta de aceptación', { direction: 'ENTRANTE' }),
-    /OCRI registra/,
+    /OCRI adjunta/,
   );
   assert.match(
     answerHelpQuestion('nominación', { direction: 'ENTRANTE' }),
     /universidad de origen/,
   );
-  assert.match(answerHelpQuestion('al volver', { direction: 'ENTRANTE' }), /coordina con OCRI/);
+  assert.match(
+    answerHelpQuestion('al volver', { direction: 'ENTRANTE' }),
+    /OCRI emite y adjunta tu certificado de estudios/,
+  );
 });
 
 test('usa una respuesta segura para consultas fuera de los temas previstos', () => {
